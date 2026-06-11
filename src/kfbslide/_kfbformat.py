@@ -168,48 +168,69 @@ def _parse_assoc_images(sec2: KfbSection, header: KfbHeader, data: bytes) -> Lis
 
 
 def parse_kfb_file(path: str) -> KfbFileInfo:
-    """解析 KFB 文件，返回完整信息。"""
+    """解析 KFB 文件，返回完整信息。
+
+    按需读取数据：先读 1MB，如果 section 0x02 或 JPEG 标记超出范围，
+    则动态扩展读取更多数据。
+    """
     with open(path, "rb") as f:
-        # 先读取前 1MB（足够包含文件头）
-        data = f.read(1024 * 1024)
+        # 先读取前 1MB（通常足够包含文件头）
+        data = bytearray(f.read(1024 * 1024))
 
-    # 读取 section 0x01
-    sec1 = _read_section(data, 0)
-    if not sec1 or sec1.sec_type != 0x01:
-        raise ValueError("Invalid KFB file: missing section 0x01")
+        # 读取 section 0x01
+        sec1 = _read_section(data, 0)
+        if not sec1 or sec1.sec_type != 0x01:
+            raise ValueError("Invalid KFB file: missing section 0x01")
 
-    header = _parse_header(sec1)
+        header = _parse_header(sec1)
 
-    # 搜索 section 0x02 (它不一定紧跟在 section 0x01 之后)
-    sec2 = None
-    sec2_pos = sec1.footer_pos + 4
-    max_search = min(sec2_pos + 10000, len(data) - 4)
-    while sec2_pos < max_search:
-        sec2 = _read_section(data, sec2_pos)
-        if sec2 and sec2.sec_type == 0x02:
-            break
-        sec2_pos += 1
-    else:
-        raise ValueError("Invalid KFB file: missing section 0x02")
+        # 搜索 section 0x02 (它不一定紧跟在 section 0x01 之后)
+        sec2_pos = sec1.footer_pos + 4
+        needed = sec2_pos + 10000 + 4  # 搜索范围 + footer 安全区
+        while len(data) < needed:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            data.extend(chunk)
 
-    # 关联图像
-    assoc_images = _parse_assoc_images(sec2, header, data)
+        sec2 = None
+        max_search = min(sec2_pos + 10000, len(data) - 4)
+        while sec2_pos < max_search:
+            sec2 = _read_section(data, sec2_pos)
+            if sec2 and sec2.sec_type == 0x02:
+                break
+            sec2_pos += 1
+        else:
+            raise ValueError("Invalid KFB file: missing section 0x02")
 
-    # 计算瓦片区域
-    # 关联图像结束后，瓦片索引表和数据开始
-    last_assoc = assoc_images[-1]
-    tile_index_offset = last_assoc.data_offset + last_assoc.data_length
+        # 关联图像
+        assoc_images = _parse_assoc_images(sec2, header, data)
 
-    # 搜索第一个 JPEG 瓦片
-    first_jpeg = data.find(b"\xff\xd8\xff", tile_index_offset)
-    if first_jpeg == -1:
-        # 可能需要读取更多数据
-        with open(path, "rb") as f:
-            f.seek(tile_index_offset)
-            more_data = f.read(10 * 1024 * 1024)  # 读取 10MB
-        first_jpeg = more_data.find(b"\xff\xd8\xff")
-        if first_jpeg != -1:
-            first_jpeg += tile_index_offset
+        # 计算瓦片区域
+        last_assoc = assoc_images[-1]
+        tile_index_offset = last_assoc.data_offset + last_assoc.data_length
+
+        # 搜索第一个 JPEG 瓦片：确保数据足够覆盖搜索范围
+        needed_jpeg = tile_index_offset + 1024 * 1024  # 至少再读 1MB
+        while len(data) < needed_jpeg:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            data.extend(chunk)
+
+        first_jpeg = data.find(b"\xff\xd8\xff", tile_index_offset)
+        if first_jpeg == -1:
+            # 继续读取更多数据直到文件末尾
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                offset = len(data)
+                data.extend(chunk)
+                local_jpeg = chunk.find(b"\xff\xd8\xff")
+                if local_jpeg != -1:
+                    first_jpeg = offset + local_jpeg
+                    break
 
     tile_data_offset = first_jpeg if first_jpeg != -1 else tile_index_offset
 

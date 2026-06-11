@@ -44,24 +44,42 @@ class _KfbPropertyMap(Mapping):
 
 
 class _AssociatedImageMap(Mapping):
-    """Lazy read-only mapping for associated images."""
+    """Lazy read-only mapping for associated images.
 
-    __slots__ = ("_filename", "_assoc_list", "_names", "_cache")
+    When a file_handle_getter is provided and returns a valid handle,
+    it reuses that handle to avoid reopening the file on every access.
+    If the handle is unavailable (e.g. slide closed), falls back to
+    opening the file independently.
+    """
 
-    def __init__(self, filename: str, assoc_images: List[KfbAssocImage]):
+    __slots__ = ("_filename", "_assoc_list", "_names", "_cache", "_fh_getter")
+
+    def __init__(
+        self,
+        filename: str,
+        assoc_images: List[KfbAssocImage],
+        file_handle_getter=None,
+    ):
         self._filename = filename
         self._assoc_list = assoc_images
         self._names = [a.name for a in assoc_images]
         self._cache: Dict[str, Image.Image] = {}
+        self._fh_getter = file_handle_getter
 
     def __getitem__(self, key: str) -> Image.Image:
         if key in self._cache:
             return self._cache[key]
         for assoc in self._assoc_list:
             if assoc.name == key:
-                with open(self._filename, "rb") as f:
-                    f.seek(assoc.data_offset)
-                    jpeg_data = f.read(assoc.data_length)
+                # Try to reuse the slide's file handle first.
+                fh = self._fh_getter() if self._fh_getter else None
+                if fh is not None:
+                    fh.seek(assoc.data_offset)
+                    jpeg_data = fh.read(assoc.data_length)
+                else:
+                    with open(self._filename, "rb") as f:
+                        f.seek(assoc.data_offset)
+                        jpeg_data = f.read(assoc.data_length)
                 img = Image.open(io.BytesIO(jpeg_data)).convert("RGBA")
                 self._cache[key] = img
                 return img
@@ -226,9 +244,13 @@ class OpenSlide:
         }
         self._properties = _KfbPropertyMap(props)
 
-        # Lazy associated images map.
+        # Lazy associated images map (reuses file handle when possible).
         self._associated_images = _AssociatedImageMap(
-            filename, self._info.assoc_images
+            filename,
+            self._info.assoc_images,
+            file_handle_getter=lambda: self._file_handle
+            if not self._closed
+            else None,
         )
 
     # ------------------------------------------------------------------
@@ -493,3 +515,10 @@ def open_slide(filename: str, **kwargs) -> OpenSlide:
             stacklevel=2,
         )
     return OpenSlide(filename)
+
+
+__all__ = [
+    "OpenSlide",
+    "KfbSlide",
+    "open_slide",
+]
