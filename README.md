@@ -1,12 +1,12 @@
 <h1 align="center">KFBSlide</h1>
 
 <p align="center">
-  <strong>A pure-Python KFB (KFBio) whole-slide image reader with an OpenSlide-compatible API</strong>
+  <strong>纯 Python 实现的 KFB（KFBio）数字病理切片读取库，提供与 OpenSlide 完全兼容的 API</strong>
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> |
-  <a href="README_zh.md">简体中文</a>
+  <a href="README_EN.md">English</a> |
+  <a href="README.md">简体中文</a>
 </p>
 
 <p align="center">
@@ -18,11 +18,11 @@
 </p>
 
 <p align="center">
-  <a href="#-features">✨ Features</a> •
-  <a href="#-installation">📦 Installation</a> •
-  <a href="#-quick-start">🚀 Quick Start</a> •
-  <a href="#-api-reference">📖 API</a> •
-  <a href="#-performance">⚡ Performance</a>
+  <a href="#-特性">✨ 特性</a> •
+  <a href="#-安装">📦 安装</a> •
+  <a href="#-快速开始">🚀 快速开始</a> •
+  <a href="#-api-参考">📖 API</a> •
+  <a href="#-性能">⚡ 性能</a>
 </p>
 
 <p align="center">
@@ -31,114 +31,114 @@
 
 ---
 
-## ✨ Features
+## ✨ 特性
 
-- 🐍 **Pure Python** — Zero native dependencies, works out of the box on Windows / macOS / Linux
-- 🔄 **OpenSlide-Compatible API** — Drop-in replacement for `openslide-python`, no code changes needed
-- 🔺 **Multi-Level Pyramids** — Automatically parses 40× / 20× / 10× / 5× / 2.5× / 1.25× levels inside KFB
-- 🖼️ **Associated Images** — Supports macro, label, and thumbnail
-- ⚡ **Tile LRU Cache** — 10~20× speedup for repeated reads of the same region
-- 📊 **Full Metadata** — MPP, objective power, tile size, and more
+- 🐍 **纯 Python 实现** — 零原生依赖，跨平台开箱即用
+- 🔄 **OpenSlide 兼容 API** — 可直接替换 `openslide-python`，无需修改业务代码
+- 🔺 **金字塔多层级读取** — 自动解析 KFB 内部 40× / 20× / 10× / 5× / 2.5× / 1.25× 层级
+- 🖼️ **关联图像读取** — 支持 macro、label、thumbnail
+- ⚡ **Tile LRU 缓存** — 重复读取同区域加速 10~20 倍
+- 📊 **完整元数据支持** — MPP、扫描倍率、瓦片尺寸等
 
 ---
 
-## 📦 Installation
+## 📦 安装
 
-### Using uv (recommended)
+### 使用 uv（推荐）
 
 ```bash
 uv pip install kfbslide
 ```
 
-### Using pip
+### 使用 pip
 
 ```bash
 pip install kfbslide
 ```
 
-Only depends on Pillow — installs directly on any platform.
+仅依赖 Pillow，任何平台都能直接安装。
 
 ---
 
-## 🚀 Quick Start
+## 🚀 快速开始
 
-### Drop-in replacement for OpenSlide
+### 作为 OpenSlide 的 drop-in 替代品
 
 ```python
 import kfbslide as openslide
 
 slide = openslide.OpenSlide("path/to/sample.kfb")
 
-print(f"Levels: {slide.level_count}")
-print(f"Level 0 dimensions: {slide.dimensions}")
+print(f"层级数: {slide.level_count}")
+print(f"Level 0 尺寸: {slide.dimensions}")
 for i in range(slide.level_count):
     print(f"  Level {i}: {slide.level_dimensions[i]} "
           f"downsample={slide.level_downsamples[i]}")
 
-# Read a region (location in level-0 coordinates, returns RGBA)
+# 读取区域（location 为 level 0 坐标，返回 RGBA）
 img = slide.read_region((1000, 2000), 0, (256, 256))
 img.save("region.png")
 
-# Thumbnail
+# 缩略图
 thumb = slide.get_thumbnail((512, 512))
 thumb.save("thumbnail.png")
 
-# Associated images
+# 关联图像
 macro = slide.associated_images["macro"]
 macro.save("macro.png")
 
-# Property access
+# 属性读取
 vendor = slide.properties[openslide.PROPERTY_NAME_VENDOR]
 mpp_x = slide.properties[openslide.PROPERTY_NAME_MPP_X]
 
 slide.close()
 ```
 
-### Context manager
+### 上下文管理器
 
 ```python
 with openslide.OpenSlide("sample.kfb") as slide:
     img = slide.read_region((0, 0), 0, (256, 256))
-# Automatically closed
+# 自动 close
 ```
 
 ---
 
-## 📖 API Reference
+## 📖 API 参考
 
 ### `OpenSlide(filename)`
 
-Open a KFB file.
+打开一个 KFB 文件。
 
-### Class methods
+### 类方法
 
-| Method | Description |
-|--------|-------------|
-| `OpenSlide.detect_format(filename)` | Detect file format, returns `"kfbio"` or `None` |
+| 方法 | 说明 |
+|------|------|
+| `OpenSlide.detect_format(filename)` | 检测文件格式，返回 `"kfbio"` 或 `None` |
 
-### Properties
+### 属性
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `level_count` | `int` | Number of pyramid levels |
-| `dimensions` | `(int, int)` | Level 0 dimensions (highest resolution) |
-| `level_dimensions` | `Tuple[(w, h), ...]` | Dimensions of each level |
-| `level_downsamples` | `Tuple[float, ...]` | Downsample factor for each level |
-| `properties` | `Mapping[str, str]` | Metadata properties (read-only mapping) |
-| `associated_images` | `Mapping[str, PIL.Image]` | Associated images: macro, label, thumbnail |
-| `color_profile` | `object \| None` | ICC color profile (currently returns `None`) |
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `level_count` | `int` | 金字塔层级数 |
+| `dimensions` | `(int, int)` | Level 0 尺寸（最高分辨率） |
+| `level_dimensions` | `Tuple[(w, h), ...]` | 每层尺寸 |
+| `level_downsamples` | `Tuple[float, ...]` | 每层下采样倍数 |
+| `properties` | `Mapping[str, str]` | 元数据属性（只读映射） |
+| `associated_images` | `Mapping[str, PIL.Image]` | 关联图像：macro、label、thumbnail |
+| `color_profile` | `object \| None` | ICC 颜色配置文件（当前返回 `None`） |
 
-### Methods
+### 方法
 
-| Method | Description |
-|--------|-------------|
-| `read_region(location, level, size)` | Read a region, returns **RGBA** image |
-| `get_best_level_for_downsample(downsample)` | Pick the best pyramid level for a given downsample factor |
-| `get_thumbnail(size)` | Generate a thumbnail |
-| `set_cache(cache)` | API-compatible no-op |
-| `close()` | Close and release resources |
+| 方法 | 说明 |
+|------|------|
+| `read_region(location, level, size)` | 读取指定区域，返回 **RGBA** 图像 |
+| `get_best_level_for_downsample(downsample)` | 根据下采样倍数选择最佳层级 |
+| `get_thumbnail(size)` | 生成缩略图 |
+| `set_cache(cache)` | API 兼容方法（当前为 no-op） |
+| `close()` | 关闭并释放资源 |
 
-### Property constants
+### 属性常量
 
 ```python
 from kfbslide import (
@@ -151,48 +151,48 @@ from kfbslide import (
 
 ---
 
-## ⚡ Performance
+## ⚡ 性能
 
-Benchmarked on `sample.kfb` (71,748 × 56,282, 82,595 tiles):
+在 `sample.kfb`（71,748 × 56,282，82,595 tiles）上测试：
 
-| Operation | Time | Note |
-|-----------|------|------|
-| First read of 256×256 region | ~2.1 ms | Pillow backend |
-| Cache-hit read | **~0.10 ms** | 22× faster |
-| Scan 20 adjacent regions (first time) | ~33 ms | 1.6 ms/region |
-| Scan 20 adjacent regions (cached) | **~2.2 ms** | 0.11 ms/region, 15× faster |
+| 操作 | 时间 | 备注 |
+|------|------|------|
+| 首次读取 256×256 region | ~2.1 ms | Pillow 后端 |
+| 缓存命中读取 | **~0.10 ms** | 22× 加速 |
+| 扫描 20 个相邻 region（首次） | ~33 ms | 1.6 ms/region |
+| 扫描 20 个相邻 region（缓存后） | **~2.2 ms** | 0.11 ms/region，15× 加速 |
 
-> Test environment: Python 3.12, Pillow, SSD.
+> 测试环境：Python 3.12，Pillow，SSD。
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ 架构
 
 <p align="center">
-  <img src="docs/fw_en.png" alt="KFBSlide Architecture" width="800">
+  <img src="docs/fw_zh.png" alt="KFBSlide Architecture" width="800">
 </p>
 
-KFBSlide is implemented entirely in pure Python, reading images by directly parsing the KFB binary format:
+KFBSlide 完全基于纯 Python 实现，通过直接解析 KFB 二进制格式完成图像读取：
 
-- **No C/C++ extensions or system dynamic libraries required**
-- **No dependency on OpenSlide, libtiff, libjpeg, or other external libraries**
-- **Single-file deployable, suitable for servers, containers, and embedded environments**
+- **无需任何 C/C++ 扩展或系统动态库**
+- **不依赖 OpenSlide、libtiff、libjpeg 等外部库**
+- **单文件即可部署，适合服务器、容器、嵌入式等场景**
 
 ---
 
-## 📁 Project Structure
+## 📁 项目结构
 
 ```
 kfbslide/
 ├── src/kfbslide/
-│   ├── __init__.py          # Package entry point, exports OpenSlide API
-│   ├── _slide.py            # OpenSlide main class
-│   ├── _kfbformat.py        # KFB binary format parser
-│   ├── _cache.py            # LRU tile cache
-│   └── _exceptions.py       # OpenSlideError / compatibility exceptions
-├── tests/                   # Tests (includes sample.kfb symlink)
-├── examples/                # Example scripts
-├── docs/                    # Documentation images
+│   ├── __init__.py          # 包入口，导出 OpenSlide API
+│   ├── _slide.py            # OpenSlide 主类
+│   ├── _kfbformat.py        # KFB 二进制格式解析
+│   ├── _cache.py            # LRU tile 缓存
+│   └── _exceptions.py       # OpenSlideError / 兼容异常
+├── tests/                   # 测试（含 sample.kfb 软链）
+├── examples/                # 示例脚本
+├── docs/                    # 文档图片
 ├── README.md
 ├── LICENSE
 └── pyproject.toml
@@ -200,11 +200,10 @@ kfbslide/
 
 ---
 
-## ⚠️ Known Limitations
+## ⚠️ 已知限制
 
-1. **Read-only**: Writing to KFB files is not currently supported.
-2. **KFB v1.6**: Verified on version 1.6 files. Other versions may require adaptation.
-3. **JPEG decoding**: Uses Pillow for JPEG decoding, consistent across all platforms.
+1. **只读**：目前不支持写入 KFB 文件。
+2. **KFB v1.6**：在版本 1.6 文件上验证过。其他版本可能需要适配。
 
 ---
 
