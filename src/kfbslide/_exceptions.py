@@ -1,4 +1,7 @@
-"""KFBSlide / OpenSlide-compatible exceptions."""
+"""KFBSlide / OpenSlide-compatible exceptions.
+
+Author: Yifan Feng <evanfeng97@gmail.com>
+"""
 
 
 class OpenSlideError(Exception):

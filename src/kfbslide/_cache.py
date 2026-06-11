@@ -1,4 +1,7 @@
-"""LRU cache for decoded KFB tiles."""
+"""LRU cache for decoded KFB tiles.
+
+Author: Yifan Feng <evanfeng97@gmail.com>
+"""
 
 from collections import OrderedDict
 from typing import Optional

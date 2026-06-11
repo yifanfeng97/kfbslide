@@ -4,6 +4,9 @@ KFBSlide — Pure Python KFB whole-slide image reader.
 A minimal, cross-platform reader for KFB (KFBio) whole-slide images
 with an OpenSlide-compatible API.
 
+Author: Yifan Feng <evanfeng97@gmail.com>
+License: MIT
+
 Drop-in replacement usage:
     import kfbslide as openslide
     slide = openslide.OpenSlide("sample.kfb")

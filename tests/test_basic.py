@@ -1,3 +1,8 @@
+"""Basic tests for KFBSlide.
+
+Author: Yifan Feng <evanfeng97@gmail.com>
+"""
+
 import collections.abc
 import os
 
@@ -136,13 +141,39 @@ def test_openslide_api_with_sample():
             img.save(os.path.join(cache, f"assoc_{name}.png"))
 
         # --- read_region returns RGBA ---
+        w0, h0 = slide.dimensions
+
+        # 1) 左上角 (已有)
         region = slide.read_region((0, 0), 0, (256, 256))
         assert isinstance(region, Image.Image)
         assert region.mode == "RGBA"
         assert region.size == (256, 256)
         region.save(os.path.join(cache, "region_0_0_256x256.png"))
 
-        # Out-of-bounds returns transparent black
+        # 2) 中心偏左区域（通常有组织）
+        cx, cy = w0 // 3, h0 // 3
+        region = slide.read_region((cx, cy), 0, (256, 256))
+        assert region.mode == "RGBA"
+        region.save(os.path.join(cache, f"region_{cx}_{cy}_256x256.png"))
+
+        # 3) 右下角附近（图像边缘，验证不越界）
+        rx, ry = max(0, w0 - 256), max(0, h0 - 256)
+        region = slide.read_region((rx, ry), 0, (256, 256))
+        assert region.mode == "RGBA"
+        region.save(os.path.join(cache, f"region_{rx}_{ry}_256x256.png"))
+
+        # 4) 不同 level 的采样（level 1，如果存在）
+        if slide.level_count > 1:
+            w1, h1 = slide.level_dimensions[1]
+            lx, ly = max(0, w1 // 2 - 128), max(0, h1 // 2 - 128)
+            region = slide.read_region(
+                (int(lx * slide.level_downsamples[1]), int(ly * slide.level_downsamples[1])),
+                1, (256, 256)
+            )
+            assert region.mode == "RGBA"
+            region.save(os.path.join(cache, "region_level1_center_256x256.png"))
+
+        # 5) 越界区域（透明黑）
         edge = slide.read_region((-100, -100), 0, (300, 300))
         assert edge.mode == "RGBA"
         px = edge.getpixel((0, 0))

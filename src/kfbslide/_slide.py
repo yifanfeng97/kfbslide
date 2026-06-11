@@ -6,7 +6,9 @@ Architecture:
 - Associated images: Pure Python (read JPEG directly from file)
 - Tile reading: Pure Python via tile index table
 - Tile cache: LRU decoded-tile cache for repeated reads
-- JPEG backend: Auto-selects TurboJPEG if available, else Pillow
+- JPEG decoding: Pillow (pure Python, no extra dependencies)
+
+Author: Yifan Feng <evanfeng97@gmail.com>
 """
 
 import io
@@ -18,7 +20,6 @@ from PIL import Image
 
 from ._cache import _LRUCache
 from ._exceptions import OpenSlideError, OpenSlideUnsupportedFormatError
-from ._jpeg_backend import decode_jpeg
 from ._kfbformat import KfbAssocImage, KfbFileInfo, parse_kfb_file
 
 
@@ -430,7 +431,7 @@ class OpenSlide:
                         offset = self._index.offsets[idx]
                         f.seek(offset)
                         jpeg = f.read(entry["size"])
-                        tile = decode_jpeg(jpeg)
+                        tile = Image.open(io.BytesIO(jpeg)).convert("RGB")
 
                         # Tile may be smaller than tile_size at image edges.
                         if tile.size != (tw, th):

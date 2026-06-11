@@ -3,6 +3,8 @@ Example: read regions from a KFB file using the OpenSlide-compatible API.
 
 Usage:
     python examples/read_region.py path/to/sample.kfb
+
+Author: Yifan Feng <evanfeng97@gmail.com>
 """
 
 import sys

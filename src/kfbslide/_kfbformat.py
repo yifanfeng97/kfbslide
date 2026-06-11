@@ -6,6 +6,8 @@ KFB 文件格式解析器 —— 纯 Python 实现
 - Section 0x02: 关联图像（macro/label/thumbnail）信息
 - 关联图像数据: JPEG 格式，紧跟在 section 0x02 之后
 - 瓦片数据: JPEG 格式，通过瓦片索引表定位
+
+Author: Yifan Feng <evanfeng97@gmail.com>
 """
 
 import struct
