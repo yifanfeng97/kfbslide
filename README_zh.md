@@ -1,11 +1,7 @@
-<p align="center">
-  <img src="docs/banner.png" alt="KFBSlide Banner" width="900">
-</p>
-
 <h1 align="center">KFBSlide</h1>
 
 <p align="center">
-  纯 Python 实现的 KFB（KFBio）数字病理切片读取库，提供与 OpenSlide 完全兼容的 API
+  <strong>纯 Python 实现的 KFB（KFBio）数字病理切片读取库，提供与 OpenSlide 完全兼容的 API</strong>
 </p>
 
 <p align="center">
@@ -14,11 +10,23 @@
 </p>
 
 <p align="center">
+  <a href="https://pypi.org/project/kfbslide"><img src="https://img.shields.io/pypi/v/kfbslide?color=blue" alt="PyPI"></a>
+  <a href="https://pypi.org/project/kfbslide"><img src="https://img.shields.io/pypi/pyversions/kfbslide" alt="Python Versions"></a>
+  <a href="https://github.com/yifanfeng97/kfbslide/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
+  <a href="https://pypi.org/project/kfbslide"><img src="https://img.shields.io/pypi/dm/kfbslide?color=orange" alt="Downloads"></a>
+  <a href="https://github.com/yifanfeng97/kfbslide"><img src="https://img.shields.io/github/stars/yifanfeng97/kfbslide?style=social" alt="Stars"></a>
+</p>
+
+<p align="center">
   <a href="#-特性">✨ 特性</a> •
   <a href="#-安装">📦 安装</a> •
   <a href="#-快速开始">🚀 快速开始</a> •
   <a href="#-api-参考">📖 API</a> •
   <a href="#-性能">⚡ 性能</a>
+</p>
+
+<p align="center">
+  <img src="docs/banner.png" alt="KFBSlide Banner" width="900">
 </p>
 
 ---

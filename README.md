@@ -1,11 +1,7 @@
-<p align="center">
-  <img src="docs/banner.png" alt="KFBSlide Banner" width="900">
-</p>
-
 <h1 align="center">KFBSlide</h1>
 
 <p align="center">
-  A pure-Python KFB (KFBio) whole-slide image reader with an OpenSlide-compatible API
+  <strong>A pure-Python KFB (KFBio) whole-slide image reader with an OpenSlide-compatible API</strong>
 </p>
 
 <p align="center">
@@ -14,11 +10,23 @@
 </p>
 
 <p align="center">
+  <a href="https://pypi.org/project/kfbslide"><img src="https://img.shields.io/pypi/v/kfbslide?color=blue" alt="PyPI"></a>
+  <a href="https://pypi.org/project/kfbslide"><img src="https://img.shields.io/pypi/pyversions/kfbslide" alt="Python Versions"></a>
+  <a href="https://github.com/yifanfeng97/kfbslide/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
+  <a href="https://pypi.org/project/kfbslide"><img src="https://img.shields.io/pypi/dm/kfbslide?color=orange" alt="Downloads"></a>
+  <a href="https://github.com/yifanfeng97/kfbslide"><img src="https://img.shields.io/github/stars/yifanfeng97/kfbslide?style=social" alt="Stars"></a>
+</p>
+
+<p align="center">
   <a href="#-features">✨ Features</a> •
   <a href="#-installation">📦 Installation</a> •
   <a href="#-quick-start">🚀 Quick Start</a> •
   <a href="#-api-reference">📖 API</a> •
   <a href="#-performance">⚡ Performance</a>
+</p>
+
+<p align="center">
+  <img src="docs/banner.png" alt="KFBSlide Banner" width="900">
 </p>
 
 ---
