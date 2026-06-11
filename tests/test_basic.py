@@ -17,6 +17,15 @@ from kfbslide import (
     PROPERTY_NAME_MPP_Y,
 )
 
+# Directory for test output images (gitignored)
+_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cache")
+
+
+def _ensure_cache_dir() -> str:
+    """Create and return the cache directory path."""
+    os.makedirs(_CACHE_DIR, exist_ok=True)
+    return _CACHE_DIR
+
 
 # ---------------------------------------------------------------------------
 # Drop-in compatibility tests (no KFB file needed)
@@ -112,28 +121,33 @@ def test_openslide_api_with_sample():
         with pytest.raises(TypeError):
             props["foo"] = "bar"
 
+        cache = _ensure_cache_dir()
+
         # --- Associated images (lazy mapping) ---
         assoc = slide.associated_images
         assert isinstance(assoc, collections.abc.Mapping)
         names = list(assoc.keys())
         assert len(names) >= 0
-        # Lazy: accessing a key triggers read
+        # Lazy: accessing a key triggers read; save to cache/
         for name in names:
             img = assoc[name]
             assert isinstance(img, Image.Image)
             assert img.mode == "RGBA"
+            img.save(os.path.join(cache, f"assoc_{name}.png"))
 
         # --- read_region returns RGBA ---
         region = slide.read_region((0, 0), 0, (256, 256))
         assert isinstance(region, Image.Image)
         assert region.mode == "RGBA"
         assert region.size == (256, 256)
+        region.save(os.path.join(cache, "region_0_0_256x256.png"))
 
         # Out-of-bounds returns transparent black
         edge = slide.read_region((-100, -100), 0, (300, 300))
         assert edge.mode == "RGBA"
         px = edge.getpixel((0, 0))
         assert px[3] == 0  # alpha = 0
+        edge.save(os.path.join(cache, "region_oob_300x300.png"))
 
         # --- get_best_level_for_downsample ---
         level = slide.get_best_level_for_downsample(2.0)
@@ -142,6 +156,7 @@ def test_openslide_api_with_sample():
         # --- get_thumbnail ---
         thumb = slide.get_thumbnail((512, 512))
         assert isinstance(thumb, Image.Image)
+        thumb.save(os.path.join(cache, "thumbnail_512x512.png"))
 
         # --- color_profile ---
         assert slide.color_profile is None

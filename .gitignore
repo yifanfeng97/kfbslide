@@ -63,3 +63,6 @@ Thumbs.db
 *.tif
 *.svs
 *.ndpi
+
+# Test output cache
+cache/
