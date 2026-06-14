@@ -171,16 +171,29 @@ We ran a head-to-head comparison against OpenSlide reading SVS files (see `bench
 
 | Operation | KFBSlide (KFB) | OpenSlide (SVS) | Speedup |
 |-----------|----------------|-----------------|---------|
-| Cache-hit 1024×1024 | 3.10 ms | 28.84 ms | **9.30×** |
-| Single region 512×512 | 5.69 ms | 8.02 ms | **1.41×** |
-| Single region 1024×1024 | 17.56 ms | 29.98 ms | **1.71×** |
-| Sequential scan 100 tiles | 294.82 ms | 843.05 ms | **2.86×** |
-| Random access 100 tiles | 584.51 ms | 1064.86 ms | **1.82×** |
-| Level 1 512×512 | 6.47 ms | 33.79 ms | **5.22×** |
+| Single region 512×512 | 5.70 ms | 7.64 ms | **1.34×** |
+| Cache-hit 512×512 | 0.90 ms | 7.10 ms | **7.89×** |
+| Single region 1024×1024 | 16.69 ms | 29.39 ms | **1.76×** |
+| Cache-hit 1024×1024 | 3.00 ms | 28.50 ms | **9.50×** |
+| Sequential scan 100 tiles | 302.41 ms | 840.74 ms | **2.78×** |
+| Random access 100 tiles | 587.49 ms | 1047.70 ms | **1.78×** |
+| Level 1 512×512 | 6.06 ms | 32.23 ms | **5.32×** |
 
 > Test files: KFB `sample.kfb` (85,678 × 44,995, 40×), SVS `sample.svs` (42,009 × 22,721, 40×).  
 > Environment: Intel Xeon E5-2678 v3 / Python 3.12 / Pillow 12.2.0 / OpenSlide 1.4.6.  
 > Full report: `benchmarks/results/report.md`.
+
+<p align="center">
+  <img src="docs/benchmark_region_en.png" alt="Single Region Read vs Cache Hit" width="900">
+</p>
+
+<p align="center">
+  <img src="docs/benchmark_scan_en.png" alt="Tile Scan Latency" width="900">
+</p>
+
+<p align="center">
+  <img src="docs/benchmark_level_en.png" alt="Pyramid Level Read Latency" width="900">
+</p>
 
 ---
 

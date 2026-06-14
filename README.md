@@ -171,16 +171,29 @@ from kfbslide import (
 
 | 操作 | KFBSlide (KFB) | OpenSlide (SVS) | 加速比 |
 |------|----------------|-----------------|--------|
-| 缓存命中 1024×1024 | 3.10 ms | 28.84 ms | **9.30×** |
-| 单区域 512×512 | 5.69 ms | 8.02 ms | **1.41×** |
-| 单区域 1024×1024 | 17.56 ms | 29.98 ms | **1.71×** |
-| 连续扫描 100 tiles | 294.82 ms | 843.05 ms | **2.86×** |
-| 随机访问 100 tiles | 584.51 ms | 1064.86 ms | **1.82×** |
-| Level 1 512×512 | 6.47 ms | 33.79 ms | **5.22×** |
+| 单区域 512×512 | 5.70 ms | 7.64 ms | **1.34×** |
+| 缓存命中 512×512 | 0.90 ms | 7.10 ms | **7.89×** |
+| 单区域 1024×1024 | 16.69 ms | 29.39 ms | **1.76×** |
+| 缓存命中 1024×1024 | 3.00 ms | 28.50 ms | **9.50×** |
+| 连续扫描 100 tiles | 302.41 ms | 840.74 ms | **2.78×** |
+| 随机访问 100 tiles | 587.49 ms | 1047.70 ms | **1.78×** |
+| Level 1 512×512 | 6.06 ms | 32.23 ms | **5.32×** |
 
 > 测试文件：KFB `sample.kfb`（85,678 × 44,995，40×），SVS `sample.svs`（42,009 × 22,721，40×）。  
 > 环境：Intel Xeon E5-2678 v3 / Python 3.12 / Pillow 12.2.0 / OpenSlide 1.4.6。  
 > 完整报告见 `benchmarks/results/report.md`。
+
+<p align="center">
+  <img src="docs/benchmark_region_zh.png" alt="单区域读取与缓存命中" width="900">
+</p>
+
+<p align="center">
+  <img src="docs/benchmark_scan_zh.png" alt="瓦片扫描延迟" width="900">
+</p>
+
+<p align="center">
+  <img src="docs/benchmark_level_zh.png" alt="金字塔层级读取延迟" width="900">
+</p>
 
 ---
 

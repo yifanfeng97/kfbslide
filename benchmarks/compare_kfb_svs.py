@@ -629,6 +629,190 @@ def _generate_charts(suite: BenchmarkSuite, output_dir: str) -> None:
         )
 
 
+def _bar_with_labels(ax, x, kfb_values, svs_values, width, kfb_label, svs_label, colors):
+    """Draw grouped bars with value labels."""
+    bars1 = ax.bar(x - width / 2, kfb_values, width, label=kfb_label, color=colors[0])
+    bars2 = ax.bar(x + width / 2, svs_values, width, label=svs_label, color=colors[1])
+    for bars in (bars1, bars2):
+        for bar in bars:
+            height = bar.get_height()
+            if height > 0:
+                ax.annotate(
+                    f"{height:.1f}",
+                    xy=(bar.get_x() + bar.get_width() / 2, height),
+                    xytext=(0, 3),
+                    textcoords="offset points",
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                )
+    return bars1, bars2
+
+
+def _generate_docs_charts(suite: BenchmarkSuite, docs_dir: str, chinese_font_path: Optional[str] = None) -> None:
+    """Generate polished Chinese/English charts for README embedding."""
+    os.makedirs(docs_dir, exist_ok=True)
+    comparisons = suite.comparisons
+    cache_results = suite.single_values.get("cache_effect", {})
+
+    colors = {"kfb": "#3498db", "svs": "#e74c3c"}
+
+    # Try to load a CJK-capable font for Chinese charts.
+    zh_font_prop = None
+    if chinese_font_path and os.path.exists(chinese_font_path):
+        from matplotlib import font_manager as fm
+        zh_font_prop = fm.FontProperties(fname=chinese_font_path)
+
+    # ------------------------------------------------------------------
+    # Chart 1: Single region cold read + cache hit (1x2 subplots)
+    # ------------------------------------------------------------------
+    def make_region_cache_chart(path: str, lang: str) -> None:
+        labels = {
+            "zh": {"title": "单区域读取 vs 缓存命中", "cold": "首次读取", "cached": "缓存命中", "kfb": "KFBSlide", "svs": "OpenSlide"},
+            "en": {"title": "Single Region Read vs Cache Hit", "cold": "First read", "cached": "Cache hit", "kfb": "KFBSlide", "svs": "OpenSlide"},
+        }[lang]
+
+        single = [r for r in comparisons if r.name.startswith("read_region")]
+        sizes = [r.name.replace("read_region ", "") for r in single]
+        cold_kfb = [r.kfb_mean for r in single]
+        cold_svs = [r.svs_mean for r in single]
+
+        cached_kfb = []
+        cached_svs = []
+        for size in ["512×512", "1024×1024"]:
+            kfb_vals = cache_results.get(f"KFBSlide {size}", [])
+            svs_vals = cache_results.get(f"OpenSlide {size}", [])
+            cached_kfb.append(kfb_vals[1].mean if len(kfb_vals) > 1 else 0.0)
+            cached_svs.append(svs_vals[1].mean if len(svs_vals) > 1 else 0.0)
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        x = np.arange(len(sizes))
+        width = 0.35
+
+        def apply_font(text_obj):
+            if zh_font_prop is not None and lang == "zh":
+                text_obj.set_fontproperties(zh_font_prop)
+
+        # Cold read
+        _bar_with_labels(axes[0], x, cold_kfb, cold_svs, width, labels["kfb"], labels["svs"], [colors["kfb"], colors["svs"]])
+        axes[0].set_ylabel("Time (ms)")
+        apply_font(axes[0].set_title(labels["cold"]))
+        axes[0].set_xticks(x)
+        for label in axes[0].get_xticklabels():
+            apply_font(label)
+        axes[0].legend()
+        axes[0].grid(axis="y", linestyle="--", alpha=0.4)
+
+        # Cache hit
+        _bar_with_labels(axes[1], x, cached_kfb, cached_svs, width, labels["kfb"], labels["svs"], [colors["kfb"], colors["svs"]])
+        axes[1].set_ylabel("Time (ms)")
+        apply_font(axes[1].set_title(labels["cached"]))
+        axes[1].set_xticks(x)
+        for label in axes[1].get_xticklabels():
+            apply_font(label)
+        axes[1].legend()
+        axes[1].grid(axis="y", linestyle="--", alpha=0.4)
+
+        suptitle = fig.suptitle(labels["title"], fontsize=14, fontweight="bold")
+        if lang == "zh":
+            apply_font(suptitle)
+        plt.tight_layout()
+        plt.savefig(path, dpi=150)
+        plt.close(fig)
+
+    # ------------------------------------------------------------------
+    # Chart 2: Sequential + random access (1x2 subplots)
+    # ------------------------------------------------------------------
+    def make_scan_chart(path: str, lang: str) -> None:
+        labels = {
+            "zh": {"title": "瓦片扫描延迟", "seq": "连续扫描", "rand": "随机访问", "kfb": "KFBSlide", "svs": "OpenSlide"},
+            "en": {"title": "Tile Scan Latency", "seq": "Sequential", "rand": "Random", "kfb": "KFBSlide", "svs": "OpenSlide"},
+        }[lang]
+
+        sequential = [r for r in comparisons if r.name.startswith("sequential scan")]
+        random_access = [r for r in comparisons if r.name.startswith("random access")]
+        seq_labels = [r.name.replace("sequential scan ", "") for r in sequential]
+        rand_labels = [r.name.replace("random access ", "") for r in random_access]
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        width = 0.35
+
+        def apply_font(text_obj):
+            if zh_font_prop is not None and lang == "zh":
+                text_obj.set_fontproperties(zh_font_prop)
+
+        # Sequential
+        x = np.arange(len(seq_labels))
+        _bar_with_labels(axes[0], x, [r.kfb_mean for r in sequential], [r.svs_mean for r in sequential], width, labels["kfb"], labels["svs"], [colors["kfb"], colors["svs"]])
+        axes[0].set_ylabel("Time (ms)")
+        apply_font(axes[0].set_title(labels["seq"]))
+        axes[0].set_xticks(x)
+        for label in axes[0].get_xticklabels():
+            apply_font(label)
+        axes[0].legend()
+        axes[0].grid(axis="y", linestyle="--", alpha=0.4)
+
+        # Random
+        x = np.arange(len(rand_labels))
+        _bar_with_labels(axes[1], x, [r.kfb_mean for r in random_access], [r.svs_mean for r in random_access], width, labels["kfb"], labels["svs"], [colors["kfb"], colors["svs"]])
+        axes[1].set_ylabel("Time (ms)")
+        apply_font(axes[1].set_title(labels["rand"]))
+        axes[1].set_xticks(x)
+        for label in axes[1].get_xticklabels():
+            apply_font(label)
+        axes[1].legend()
+        axes[1].grid(axis="y", linestyle="--", alpha=0.4)
+
+        suptitle = fig.suptitle(labels["title"], fontsize=14, fontweight="bold")
+        if lang == "zh":
+            apply_font(suptitle)
+        plt.tight_layout()
+        plt.savefig(path, dpi=150)
+        plt.close(fig)
+
+    # ------------------------------------------------------------------
+    # Chart 3: Pyramid level latency
+    # ------------------------------------------------------------------
+    def make_level_chart(path: str, lang: str) -> None:
+        labels = {
+            "zh": {"title": "金字塔层级读取延迟 (512×512)", "kfb": "KFBSlide", "svs": "OpenSlide"},
+            "en": {"title": "Pyramid Level Read Latency (512×512)", "kfb": "KFBSlide", "svs": "OpenSlide"},
+        }[lang]
+
+        levels = [r for r in comparisons if r.name.startswith("level ")]
+        level_labels = [r.name.replace("level ", "L") for r in levels]
+        x = np.arange(len(level_labels))
+        width = 0.35
+
+        def apply_font(text_obj):
+            if zh_font_prop is not None and lang == "zh":
+                text_obj.set_fontproperties(zh_font_prop)
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+        _bar_with_labels(ax, x, [r.kfb_mean for r in levels], [r.svs_mean for r in levels], width, labels["kfb"], labels["svs"], [colors["kfb"], colors["svs"]])
+        ax.set_ylabel("Time (ms)")
+        title = ax.set_title(labels["title"])
+        if lang == "zh":
+            apply_font(title)
+        ax.set_xticks(x)
+        ax.set_xticklabels(level_labels)
+        ax.legend()
+        ax.grid(axis="y", linestyle="--", alpha=0.4)
+        plt.tight_layout()
+        plt.savefig(path, dpi=150)
+        plt.close(fig)
+
+    # Generate Chinese charts first with CJK font if available.
+    make_region_cache_chart(os.path.join(docs_dir, "benchmark_region_zh.png"), "zh")
+    make_scan_chart(os.path.join(docs_dir, "benchmark_scan_zh.png"), "zh")
+    make_level_chart(os.path.join(docs_dir, "benchmark_level_zh.png"), "zh")
+
+    # Generate English charts.
+    make_region_cache_chart(os.path.join(docs_dir, "benchmark_region_en.png"), "en")
+    make_scan_chart(os.path.join(docs_dir, "benchmark_scan_en.png"), "en")
+    make_level_chart(os.path.join(docs_dir, "benchmark_level_en.png"), "en")
+
+
 def _generate_report(suite: BenchmarkSuite, output_dir: str) -> str:
     from PIL import __version__ as pillow_version
 
@@ -668,7 +852,13 @@ def _print_summary(suite: BenchmarkSuite) -> None:
     print()
 
 
-def run_benchmark(kfb_path: str, svs_path: str, output_dir: str, repeats: int = 5) -> BenchmarkSuite:
+def run_benchmark(
+    kfb_path: str,
+    svs_path: str,
+    output_dir: str,
+    repeats: int = 5,
+    chinese_font_path: Optional[str] = None,
+) -> BenchmarkSuite:
     """Run the full benchmark suite and return results."""
     suite = BenchmarkSuite()
     suite.metadata["kfb_path"] = kfb_path
@@ -711,6 +901,9 @@ def run_benchmark(kfb_path: str, svs_path: str, output_dir: str, repeats: int = 
     print("Generating charts...")
     _generate_charts(suite, output_dir)
 
+    print("Generating docs charts...")
+    _generate_docs_charts(suite, "docs", chinese_font_path)
+
     print("Generating report...")
     report_path = _generate_report(suite, output_dir)
     print(f"Report saved to: {report_path}")
@@ -744,6 +937,11 @@ def main() -> int:
         default=10,
         help="Number of repeats per measurement (default: 10)",
     )
+    parser.add_argument(
+        "--chinese-font",
+        default=None,
+        help="Path to a TTF/OTF font supporting CJK glyphs for Chinese charts",
+    )
     args = parser.parse_args()
 
     if not HAS_OPENSLIDE:
@@ -771,7 +969,7 @@ def main() -> int:
         )
         return 1
 
-    run_benchmark(kfb_path, svs_path, args.output, args.repeats)
+    run_benchmark(kfb_path, svs_path, args.output, args.repeats, args.chinese_font)
     return 0
 
 
