@@ -164,6 +164,23 @@ from kfbslide import (
 
 > 测试环境：Python 3.12，Pillow，SSD。
 
+### 与 OpenSlide 对比
+
+我们与 OpenSlide 读取 SVS 格式做了横向对比（测试脚本见 `benchmarks/compare_kfb_svs.py`）：
+
+| 操作 | KFBSlide (KFB) | OpenSlide (SVS) | 加速比 |
+|------|----------------|-----------------|--------|
+| 单区域 256×256 | 2.48 ms | 2.05 ms | 0.83× |
+| 单区域 1024×1024 | 17.25 ms | 29.69 ms | **1.72×** |
+| 连续扫描 100 tiles | 74.60 ms | 186.70 ms | **2.50×** |
+| 随机访问 100 tiles | 266.17 ms | 324.03 ms | **1.22×** |
+| Level 1 256×256 | 2.60 ms | 8.19 ms | **3.15×** |
+| 缓存命中 256×256 | 0.27 ms | 1.84 ms | **6.81×** |
+
+> 测试文件：KFB `sample.kfb`（85,678 × 44,995，40×），SVS `sample.svs`（42,009 × 22,721，40×）。  
+> 环境：Intel Xeon E5-2678 v3 / Python 3.12 / Pillow 12.2.0 / OpenSlide 1.4.6。  
+> 完整报告见 `benchmarks/results/report.md`。
+
 ---
 
 ## 🏗️ 架构
