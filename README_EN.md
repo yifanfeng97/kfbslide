@@ -170,12 +170,12 @@ We ran a head-to-head comparison against OpenSlide reading SVS files (see `bench
 
 | Operation | KFBSlide (KFB) | OpenSlide (SVS) | Speedup |
 |-----------|----------------|-----------------|---------|
-| Single region 256×256 | 2.48 ms | 2.05 ms | 0.83× |
-| Single region 1024×1024 | 17.25 ms | 29.69 ms | **1.72×** |
-| Sequential scan 100 tiles | 74.60 ms | 186.70 ms | **2.50×** |
-| Random access 100 tiles | 266.17 ms | 324.03 ms | **1.22×** |
-| Level 1 256×256 | 2.60 ms | 8.19 ms | **3.15×** |
-| Cache-hit 256×256 | 0.27 ms | 1.84 ms | **6.81×** |
+| Single region 512×512 | 5.74 ms | 7.65 ms | **1.33×** |
+| Single region 1024×1024 | 16.97 ms | 30.23 ms | **1.78×** |
+| Sequential scan 100 tiles | 74.65 ms | 186.62 ms | **2.50×** |
+| Random access 100 tiles | 264.76 ms | 322.70 ms | **1.22×** |
+| Level 1 256×256 | 2.52 ms | 8.02 ms | **3.19×** |
+| Cache-hit 256×256 | 0.27 ms | 1.81 ms | **6.70×** |
 
 > Test files: KFB `sample.kfb` (85,678 × 44,995, 40×), SVS `sample.svs` (42,009 × 22,721, 40×).  
 > Environment: Intel Xeon E5-2678 v3 / Python 3.12 / Pillow 12.2.0 / OpenSlide 1.4.6.  

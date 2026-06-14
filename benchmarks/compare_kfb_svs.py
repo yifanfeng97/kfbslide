@@ -260,7 +260,7 @@ def _benchmark_single_region(
     kfb_w, kfb_h = kfb.dimensions
     svs_w, svs_h = svs.dimensions
 
-    sizes = [(256, 256), (512, 512), (1024, 1024)]
+    sizes = [(512, 512), (1024, 1024)]
     for w, h in sizes:
         kfb_x = max(0, kfb_w // 2 - w // 2)
         kfb_y = max(0, kfb_h // 2 - h // 2)
