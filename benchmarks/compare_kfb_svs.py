@@ -246,8 +246,8 @@ def _make_single_value_chart(
 
 def _warmup(kfb: KfbOpenSlide, svs: OSlide) -> None:
     """Read one region from each slide to warm up file system / internal caches."""
-    kfb.read_region((0, 0), 0, (256, 256))
-    svs.read_region((0, 0), 0, (256, 256))
+    kfb.read_region((0, 0), 0, (512, 512))
+    svs.read_region((0, 0), 0, (512, 512))
 
 
 def _benchmark_single_region(
@@ -295,7 +295,7 @@ def _benchmark_sequential_scan(
 ) -> List[BenchmarkResult]:
     """Benchmark reading a grid of adjacent tiles."""
     results: List[BenchmarkResult] = []
-    tile_size = 256
+    tile_size = 512
     counts = [20, 50, 100]
 
     # Map counts to rectangular grids that fit in both images.
@@ -352,7 +352,7 @@ def _benchmark_random_access(
 ) -> List[BenchmarkResult]:
     """Benchmark reading scattered tiles to defeat cache."""
     results: List[BenchmarkResult] = []
-    tile_size = 256
+    tile_size = 512
     counts = [20, 50, 100]
     rng = random.Random(42)
 
@@ -404,7 +404,7 @@ def _benchmark_levels(
 ) -> List[BenchmarkResult]:
     """Benchmark read_region at different pyramid levels."""
     results: List[BenchmarkResult] = []
-    tile_size = 256
+    tile_size = 512
     max_level = min(4, kfb.level_count, svs.level_count)
 
     # Location is always in level-0 coordinates for OpenSlide-compatible APIs.
@@ -428,7 +428,7 @@ def _benchmark_levels(
         svs_mean, svs_std = _timeit(svs_read, repeats)
         results.append(
             BenchmarkResult(
-                name=f"level {level} 256×256",
+                name=f"level {level} 512×512",
                 kfb_mean=kfb_mean,
                 kfb_std=kfb_std,
                 svs_mean=svs_mean,
@@ -444,7 +444,7 @@ def _benchmark_cache_effect(
     repeats: int,
 ) -> Tuple[List[SingleValueResult], List[SingleValueResult]]:
     """Measure first-read (cold) vs cached-read times for a fixed tile."""
-    tile_size = 256
+    tile_size = 512
     kfb_w, kfb_h = kfb.dimensions
     svs_w, svs_h = svs.dimensions
 
@@ -593,7 +593,7 @@ def _generate_charts(suite: BenchmarkSuite, output_dir: str) -> None:
         labels = [r.name.replace("level ", "L") for r in levels]
         _make_chart(
             os.path.join(output_dir, "level_latency.png"),
-            "Read Latency by Pyramid Level (256×256)",
+            "Read Latency by Pyramid Level (512×512)",
             labels,
             [r.kfb_mean for r in levels],
             [r.svs_mean for r in levels],
@@ -606,7 +606,7 @@ def _generate_charts(suite: BenchmarkSuite, output_dir: str) -> None:
         labels = ["first read", "cached read"]
         _make_single_value_chart(
             os.path.join(output_dir, "cache_effect.png"),
-            "First Read vs Cached Read (256×256 tile)",
+            "First Read vs Cached Read (512×512 tile)",
             labels,
             {
                 name: [v.mean for v in vals]

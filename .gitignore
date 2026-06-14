@@ -67,3 +67,6 @@ Thumbs.db
 # Test output cache
 cache/
 benchmarks/results/
+
+# Superpowers design docs (local only)
+docs/superpowers/
