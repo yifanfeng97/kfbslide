@@ -442,60 +442,75 @@ def _benchmark_cache_effect(
     kfb: KfbOpenSlide,
     svs: OSlide,
     repeats: int,
-) -> Tuple[List[SingleValueResult], List[SingleValueResult]]:
-    """Measure first-read (cold) vs cached-read times for a fixed tile."""
-    tile_size = 512
+) -> Dict[str, List[SingleValueResult]]:
+    """Measure first-read (cold) vs cached-read times for fixed tiles.
+
+    Returns a dict mapping series labels to [first_read, cached_read] results.
+    """
+    sizes = [512, 1024]
     kfb_w, kfb_h = kfb.dimensions
     svs_w, svs_h = svs.dimensions
+    all_results: Dict[str, List[SingleValueResult]] = {}
 
-    kfb_x = max(0, kfb_w // 2 - tile_size // 2)
-    kfb_y = max(0, kfb_h // 2 - tile_size // 2)
-    svs_x = max(0, svs_w // 2 - tile_size // 2)
-    svs_y = max(0, svs_h // 2 - tile_size // 2)
+    for tile_size in sizes:
+        kfb_x = max(0, kfb_w // 2 - tile_size // 2)
+        kfb_y = max(0, kfb_h // 2 - tile_size // 2)
+        svs_x = max(0, svs_w // 2 - tile_size // 2)
+        svs_y = max(0, svs_h // 2 - tile_size // 2)
 
-    kfb_cold: List[float] = []
-    kfb_warm: List[float] = []
-    svs_cold: List[float] = []
-    svs_warm: List[float] = []
+        kfb_cold: List[float] = []
+        kfb_warm: List[float] = []
+        svs_cold: List[float] = []
+        svs_warm: List[float] = []
 
-    for _ in range(repeats):
-        # KFB cold
-        kfb._tile_cache.clear()
-        start = time.perf_counter()
-        kfb.read_region((kfb_x, kfb_y), 0, (tile_size, tile_size))
-        kfb_cold.append((time.perf_counter() - start) * 1000.0)
+        for _ in range(repeats):
+            # KFB cold
+            kfb._tile_cache.clear()
+            start = time.perf_counter()
+            kfb.read_region((kfb_x, kfb_y), 0, (tile_size, tile_size))
+            kfb_cold.append((time.perf_counter() - start) * 1000.0)
 
-        # KFB warm (same tile, cache should hit)
-        start = time.perf_counter()
-        kfb.read_region((kfb_x, kfb_y), 0, (tile_size, tile_size))
-        kfb_warm.append((time.perf_counter() - start) * 1000.0)
+            # KFB warm (same tile, cache should hit)
+            start = time.perf_counter()
+            kfb.read_region((kfb_x, kfb_y), 0, (tile_size, tile_size))
+            kfb_warm.append((time.perf_counter() - start) * 1000.0)
 
-        # SVS cold
-        start = time.perf_counter()
-        svs.read_region((svs_x, svs_y), 0, (tile_size, tile_size))
-        svs_cold.append((time.perf_counter() - start) * 1000.0)
+            # SVS cold
+            start = time.perf_counter()
+            svs.read_region((svs_x, svs_y), 0, (tile_size, tile_size))
+            svs_cold.append((time.perf_counter() - start) * 1000.0)
 
-        # SVS warm
-        start = time.perf_counter()
-        svs.read_region((svs_x, svs_y), 0, (tile_size, tile_size))
-        svs_warm.append((time.perf_counter() - start) * 1000.0)
+            # SVS warm
+            start = time.perf_counter()
+            svs.read_region((svs_x, svs_y), 0, (tile_size, tile_size))
+            svs_warm.append((time.perf_counter() - start) * 1000.0)
 
-    def stats(values: List[float]) -> SingleValueResult:
-        return SingleValueResult(
-            name="",
-            mean=statistics.mean(values),
-            std=statistics.stdev(values) if len(values) > 1 else 0.0,
-        )
+        all_results[f"KFBSlide {tile_size}×{tile_size}"] = [
+            SingleValueResult(
+                name="first read",
+                mean=statistics.mean(kfb_cold),
+                std=statistics.stdev(kfb_cold) if len(kfb_cold) > 1 else 0.0,
+            ),
+            SingleValueResult(
+                name="cached read",
+                mean=statistics.mean(kfb_warm),
+                std=statistics.stdev(kfb_warm) if len(kfb_warm) > 1 else 0.0,
+            ),
+        ]
+        all_results[f"OpenSlide {tile_size}×{tile_size}"] = [
+            SingleValueResult(
+                name="first read",
+                mean=statistics.mean(svs_cold),
+                std=statistics.stdev(svs_cold) if len(svs_cold) > 1 else 0.0,
+            ),
+            SingleValueResult(
+                name="cached read",
+                mean=statistics.mean(svs_warm),
+                std=statistics.stdev(svs_warm) if len(svs_warm) > 1 else 0.0,
+            ),
+        ]
 
-    kfb_results = [
-        SingleValueResult(name="first read", mean=statistics.mean(kfb_cold), std=statistics.stdev(kfb_cold) if len(kfb_cold) > 1 else 0.0),
-        SingleValueResult(name="cached read", mean=statistics.mean(kfb_warm), std=statistics.stdev(kfb_warm) if len(kfb_warm) > 1 else 0.0),
-    ]
-    svs_results = [
-        SingleValueResult(name="first read", mean=statistics.mean(svs_cold), std=statistics.stdev(svs_cold) if len(svs_cold) > 1 else 0.0),
-        SingleValueResult(name="cached read", mean=statistics.mean(svs_warm), std=statistics.stdev(svs_warm) if len(svs_warm) > 1 else 0.0),
-    ]
-    return kfb_results, svs_results
+    return all_results
 
 
 def _build_summary_table(results: List[BenchmarkResult]) -> str:
@@ -602,11 +617,10 @@ def _generate_charts(suite: BenchmarkSuite, output_dir: str) -> None:
     # 5. Cache effect
     if "cache_effect" in suite.single_values:
         cache_results = suite.single_values["cache_effect"]
-        # cache_results is a dict {"KFBSlide": [...], "OpenSlide": [...]}
         labels = ["first read", "cached read"]
         _make_single_value_chart(
             os.path.join(output_dir, "cache_effect.png"),
-            "First Read vs Cached Read (512×512 tile)",
+            "First Read vs Cached Read",
             labels,
             {
                 name: [v.mean for v in vals]
@@ -689,11 +703,7 @@ def run_benchmark(kfb_path: str, svs_path: str, output_dir: str, repeats: int = 
     suite.comparisons.extend(_benchmark_levels(kfb, svs, repeats))
 
     print("Benchmarking cache effect...")
-    kfb_cache, svs_cache = _benchmark_cache_effect(kfb, svs, repeats)
-    suite.single_values["cache_effect"] = {
-        "KFBSlide": kfb_cache,
-        "OpenSlide": svs_cache,
-    }
+    suite.single_values["cache_effect"] = _benchmark_cache_effect(kfb, svs, repeats)
 
     kfb.close()
     svs.close()

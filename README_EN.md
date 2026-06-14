@@ -35,6 +35,7 @@
 
 - 🐍 **Pure Python** — Zero native dependencies, works out of the box on Windows / macOS / Linux
 - 🔄 **OpenSlide-Compatible API** — Drop-in replacement for `openslide-python`, no code changes needed
+- ⚡ **Faster than OpenSlide** — KFB reads outperform OpenSlide reading SVS in typical scenarios (see [Performance](#-performance))
 - 🔺 **Multi-Level Pyramids** — Automatically parses 40× / 20× / 10× / 5× / 2.5× / 1.25× levels inside KFB
 - 🖼️ **Associated Images** — Supports macro, label, and thumbnail
 - ⚡ **Tile LRU Cache** — 10~20× speedup for repeated reads of the same region
@@ -153,14 +154,14 @@ from kfbslide import (
 
 ## ⚡ Performance
 
-Benchmarked on `sample.kfb` (71,748 × 56,282, 82,595 tiles):
+Benchmarked on `sample.kfb` (85,678 × 44,995, 78,724 tiles):
 
 | Operation | Time | Note |
 |-----------|------|------|
-| First read of 256×256 region | ~2.1 ms | Pillow backend |
-| Cache-hit read | **~0.10 ms** | 22× faster |
-| Scan 20 adjacent regions (first time) | ~33 ms | 1.6 ms/region |
-| Scan 20 adjacent regions (cached) | **~2.2 ms** | 0.11 ms/region, 15× faster |
+| First read of 512×512 region | ~5.7 ms | Pillow backend |
+| Cache-hit read 512×512 | **~0.9 ms** | 6× faster |
+| Scan 20 adjacent 512×512 regions (first time) | ~58 ms | 2.9 ms/region |
+| Scan 20 adjacent 512×512 regions (cached) | **~20 ms** | 1.0 ms/region, 2.9× faster |
 
 > Test environment: Python 3.12, Pillow, SSD.
 
@@ -170,12 +171,12 @@ We ran a head-to-head comparison against OpenSlide reading SVS files (see `bench
 
 | Operation | KFBSlide (KFB) | OpenSlide (SVS) | Speedup |
 |-----------|----------------|-----------------|---------|
-| Cache-hit 512×512 | 0.89 ms | 7.35 ms | **8.26×** |
-| Single region 512×512 | 5.81 ms | 7.80 ms | **1.34×** |
-| Single region 1024×1024 | 16.81 ms | 29.93 ms | **1.78×** |
-| Sequential scan 100 tiles | 297.48 ms | 846.10 ms | **2.84×** |
-| Random access 100 tiles | 604.17 ms | 1051.36 ms | **1.74×** |
-| Level 1 512×512 | 5.88 ms | 32.28 ms | **5.49×** |
+| Cache-hit 1024×1024 | 3.10 ms | 28.84 ms | **9.30×** |
+| Single region 512×512 | 5.69 ms | 8.02 ms | **1.41×** |
+| Single region 1024×1024 | 17.56 ms | 29.98 ms | **1.71×** |
+| Sequential scan 100 tiles | 294.82 ms | 843.05 ms | **2.86×** |
+| Random access 100 tiles | 584.51 ms | 1064.86 ms | **1.82×** |
+| Level 1 512×512 | 6.47 ms | 33.79 ms | **5.22×** |
 
 > Test files: KFB `sample.kfb` (85,678 × 44,995, 40×), SVS `sample.svs` (42,009 × 22,721, 40×).  
 > Environment: Intel Xeon E5-2678 v3 / Python 3.12 / Pillow 12.2.0 / OpenSlide 1.4.6.  
