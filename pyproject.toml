@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kfbslide"
-version = "0.2.0"
+version = "0.3.0"
 description = "Pure Python KFB whole-slide image reader with OpenSlide-compatible API"
 readme = "README.md"
 license = "MIT"

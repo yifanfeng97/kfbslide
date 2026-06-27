@@ -10,11 +10,21 @@
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/kfbslide"><img src="https://img.shields.io/pypi/v/kfbslide?color=blue" alt="PyPI"></a>
-  <a href="https://pypi.org/project/kfbslide"><img src="https://img.shields.io/pypi/pyversions/kfbslide" alt="Python Versions"></a>
-  <a href="https://github.com/yifanfeng97/kfbslide/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
-  <a href="https://pypi.org/project/kfbslide"><img src="https://img.shields.io/pypi/dm/kfbslide?color=orange" alt="Downloads"></a>
-  <a href="https://github.com/yifanfeng97/kfbslide"><img src="https://img.shields.io/github/stars/yifanfeng97/kfbslide?style=social" alt="Stars"></a>
+  <a href="https://pypi.org/project/kfbslide/">
+    <img src="https://img.shields.io/pypi/v/kfbslide?style=for-the-badge&logo=pypi&logoColor=white&labelColor=1a1a2e&color=3776ab" alt="PyPI Version">
+  </a>
+  <a href="https://python.org">
+    <img src="https://img.shields.io/badge/python-3.10%2B-3776ab?style=for-the-badge&logo=python&logoColor=white&labelColor=1a1a2e" alt="Python Version">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-MIT-06b6d4?style=for-the-badge&labelColor=1a1a2e" alt="License">
+  </a>
+  <a href="https://pypi.org/project/kfbslide/">
+    <img src="https://img.shields.io/pypi/dm/kfbslide?style=for-the-badge&logo=pypi&logoColor=white&labelColor=1a1a2e&color=f97316" alt="Downloads">
+  </a>
+  <a href="https://github.com/yifanfeng97/kfbslide/stargazers">
+    <img src="https://img.shields.io/github/stars/yifanfeng97/kfbslide?style=for-the-badge&logo=github&labelColor=1a1a2e&color=facc15" alt="GitHub Stars">
+  </a>
 </p>
 
 <p align="center">
@@ -26,7 +36,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/banner.png" alt="KFBSlide Banner" width="900">
+  <img src="https://raw.githubusercontent.com/yifanfeng97/kfbslide/main/docs/banner.png" alt="KFBSlide Banner" width="900">
 </p>
 
 ---
@@ -184,15 +194,15 @@ We ran a head-to-head comparison against OpenSlide reading SVS files (see `bench
 > Full report: `benchmarks/results/report.md`.
 
 <p align="center">
-  <img src="docs/benchmark_region_en.png" alt="Single Region Read vs Cache Hit" width="900">
+  <img src="https://raw.githubusercontent.com/yifanfeng97/kfbslide/main/docs/benchmark_region_en.png" alt="Single Region Read vs Cache Hit" width="900">
 </p>
 
 <p align="center">
-  <img src="docs/benchmark_scan_en.png" alt="Tile Scan Latency" width="900">
+  <img src="https://raw.githubusercontent.com/yifanfeng97/kfbslide/main/docs/benchmark_scan_en.png" alt="Tile Scan Latency" width="900">
 </p>
 
 <p align="center">
-  <img src="docs/benchmark_level_en.png" alt="Pyramid Level Read Latency" width="900">
+  <img src="https://raw.githubusercontent.com/yifanfeng97/kfbslide/main/docs/benchmark_level_en.png" alt="Pyramid Level Read Latency" width="900">
 </p>
 
 ---
@@ -200,7 +210,7 @@ We ran a head-to-head comparison against OpenSlide reading SVS files (see `bench
 ## 🏗️ Architecture
 
 <p align="center">
-  <img src="docs/fw_en.png" alt="KFBSlide Architecture" width="800">
+  <img src="https://raw.githubusercontent.com/yifanfeng97/kfbslide/main/docs/fw_en.png" alt="KFBSlide Architecture" width="800">
 </p>
 
 KFBSlide is implemented entirely in pure Python, reading images by directly parsing the KFB binary format:

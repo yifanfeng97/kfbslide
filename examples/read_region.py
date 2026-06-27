@@ -4,9 +4,14 @@ Example: read regions from a KFB file using the OpenSlide-compatible API.
 Usage:
     python examples/read_region.py path/to/sample.kfb
 
+Note:
+    kfbslide returns RGBA images (OpenSlide-compatible). JPEG does not support
+    an alpha channel, so this example converts to RGB before saving as JPG.
+
 Author: Yifan Feng <evanfeng97@gmail.com>
 """
 
+import random
 import sys
 
 from kfbslide import OpenSlide, PROPERTY_NAME_VENDOR, PROPERTY_NAME_MPP_X
@@ -29,19 +34,27 @@ def main():
         ds = slide.level_downsamples[i]
         print(f"  Level {i}: {w}x{h}, downsample={ds}")
 
-    # Read a 256x256 region at level 0 (returns RGBA)
-    img = slide.read_region((0, 0), 0, (256, 256))
-    print(f"Region mode: {img.mode}")
-    img.save("region_0_0.png")
+    # Read 6 random patches at level 0 (returns RGBA)
+    patch_size = 256
+    w0, h0 = slide.dimensions
+    max_x = max(0, w0 - patch_size)
+    max_y = max(0, h0 - patch_size)
+
+    for i in range(6):
+        x = random.randint(0, max_x)
+        y = random.randint(0, max_y)
+        img = slide.read_region((x, y), 0, (patch_size, patch_size))
+        print(f"Patch {i}: ({x}, {y}) mode={img.mode}")
+        img.convert("RGB").save(f"patch_{i}_{x}_{y}.jpg")
 
     # Get thumbnail
     thumb = slide.get_thumbnail((512, 512))
-    thumb.save("thumbnail.jpg")
+    thumb.convert("RGB").save("thumbnail.jpg")
 
     # Access associated images lazily
     for name in slide.associated_images.keys():
         assoc_img = slide.associated_images[name]
-        assoc_img.save(f"{name}.jpg")
+        assoc_img.convert("RGB").save(f"{name}.jpg")
         print(f"Saved {name}: {assoc_img.size} mode={assoc_img.mode}")
 
     # Properties

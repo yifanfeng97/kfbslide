@@ -12,6 +12,7 @@ Author: Yifan Feng <evanfeng97@gmail.com>
 """
 
 import io
+import os
 import struct
 from collections.abc import Mapping
 from typing import Dict, List, Optional, Tuple
@@ -193,7 +194,6 @@ class OpenSlide:
     __slots__ = (
         "_filename",
         "_closed",
-        "_error",
         "_tile_cache",
         "_file_handle",
         "_info",
@@ -205,7 +205,6 @@ class OpenSlide:
     def __init__(self, filename: str):
         self._filename = filename
         self._closed = False
-        self._error = False
         self._tile_cache = _LRUCache(256)
         self._file_handle: Optional[io.BufferedReader] = None
 
@@ -282,10 +281,132 @@ class OpenSlide:
         if self._closed:
             raise OpenSlideError("Slide is closed")
 
-    def _check_error(self) -> None:
-        """Raise if an error has occurred (latching semantics)."""
-        if self._error:
-            raise OpenSlideError("OpenSlide error has occurred")
+    def _file_size(self) -> int:
+        """Return the size of the underlying file."""
+        if self._file_handle is None:
+            return 0
+        return os.fstat(self._file_handle.fileno()).st_size
+
+    def _try_heal_tile(self, idx: int, exc: Exception) -> Image.Image:
+        """Attempt to recover a tile whose index entry points to invalid JPEG data.
+
+        Some real-world KFB files contain corrupt tile index entries where the
+        recorded offset/size does not match the actual JPEG stream. The JPEG
+        data itself is intact; only the index is wrong. This method searches a
+        small window for a valid JPEG SOI/EOI pair and, if found, updates the
+        in-memory index so the tile (and its neighbors) can be read correctly.
+
+        If recovery fails, the original exception is re-raised.
+        """
+        if self._file_handle is None:
+            raise exc
+
+        offset = self._index.offsets[idx]
+        recorded_size = self._index.entries[idx]["size"]
+        file_size = self._file_size()
+
+        # Search a small window around the recorded byte range. The real-world
+        # corruption seen so far shifts data by at most a few KB.
+        search_start = max(0, offset - 2048)
+        search_end = min(offset + recorded_size + 2048, file_size)
+        if search_end <= search_start:
+            raise exc
+
+        self._file_handle.seek(search_start)
+        window = self._file_handle.read(search_end - search_start)
+        if len(window) < 4:
+            raise exc
+
+        # Locate JPEG SOI markers (0xFFD8) and prefer the one closest to the
+        # recorded offset, since that is most likely the intended tile.
+        soi_positions = []
+        start = 0
+        while True:
+            pos = window.find(b"\xff\xd8", start)
+            if pos == -1:
+                break
+            soi_positions.append(pos)
+            start = pos + 2
+
+        if not soi_positions:
+            raise exc
+
+        recorded_rel = offset - search_start
+        soi_positions.sort(key=lambda p: abs(p - recorded_rel))
+
+        for soi_pos in soi_positions:
+            soi_abs = search_start + soi_pos
+            eoi_pos = window.find(b"\xff\xd9", soi_pos + 2)
+            if eoi_pos == -1:
+                continue
+            eoi_abs = search_start + eoi_pos + 2  # include EOI marker
+            actual_size = eoi_abs - soi_abs
+            if actual_size <= 0:
+                continue
+
+            try:
+                self._file_handle.seek(soi_abs)
+                data = self._file_handle.read(actual_size)
+                tile = Image.open(io.BytesIO(data)).convert("RGB")
+            except Exception:
+                continue
+
+            # Update in-memory index entries. The recovered tile may take bytes
+            # from the previous tile or give bytes to the next tile, so adjust
+            # neighbors accordingly and recompute cumulative offsets.
+            old_offset = offset
+            old_size = recorded_size
+
+            self._index.offsets[idx] = soi_abs
+            self._index.entries[idx]["size"] = actual_size
+
+            delta_start = soi_abs - old_offset
+            delta_end = (soi_abs + actual_size) - (old_offset + old_size)
+
+            if idx > 0 and delta_start != 0:
+                self._index.entries[idx - 1]["size"] += delta_start
+
+            if idx + 1 < len(self._index.entries):
+                self._index.entries[idx + 1]["size"] -= delta_end
+
+            # Recompute cumulative offsets from idx+1 onwards to keep the
+            # entire offset table consistent.
+            cumulative = self._index.offsets[idx] + self._index.entries[idx]["size"]
+            for i in range(idx + 1, len(self._index.offsets)):
+                self._index.offsets[i] = cumulative
+                cumulative += self._index.entries[i]["size"]
+
+            return tile
+
+        raise exc
+
+    def _read_decoded_tile(self, idx: int) -> Image.Image:
+        """Read and decode a single tile, with self-healing for index corruption."""
+        tile = self._tile_cache.get(idx)
+        if tile is not None:
+            return tile
+
+        if self._file_handle is None:
+            raise OpenSlideError("Slide is closed")
+
+        entry = self._index.entries[idx]
+        tw, th = entry["width"], entry["height"]
+
+        offset = self._index.offsets[idx]
+        size = entry["size"]
+        self._file_handle.seek(offset)
+        jpeg = self._file_handle.read(size)
+
+        try:
+            tile = Image.open(io.BytesIO(jpeg)).convert("RGB")
+        except Exception as exc:
+            tile = self._try_heal_tile(idx, exc)
+
+        if tile.size != (tw, th):
+            tile = tile.resize((tw, th))
+
+        self._tile_cache.put(idx, tile)
+        return tile
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self._filename!r})"
@@ -316,49 +437,42 @@ class OpenSlide:
     def level_count(self) -> int:
         """Number of pyramid levels."""
         self._check_open()
-        self._check_error()
         return self._index.level_count
 
     @property
     def dimensions(self) -> Tuple[int, int]:
         """Dimensions of the slide at level 0 (highest resolution)."""
         self._check_open()
-        self._check_error()
         return self._index.level_dimensions()[0]
 
     @property
     def level_dimensions(self) -> Tuple[Tuple[int, int], ...]:
         """Dimensions of each pyramid level."""
         self._check_open()
-        self._check_error()
         return self._index.level_dimensions()
 
     @property
     def level_downsamples(self) -> Tuple[float, ...]:
         """Downsample factor for each level."""
         self._check_open()
-        self._check_error()
         return self._index.level_downsamples()
 
     @property
     def properties(self) -> Mapping[str, str]:
         """Metadata properties as a read-only mapping."""
         self._check_open()
-        self._check_error()
         return self._properties
 
     @property
     def associated_images(self) -> Mapping[str, Image.Image]:
         """Associated images (macro, label, thumbnail) as a lazy mapping."""
         self._check_open()
-        self._check_error()
         return self._associated_images
 
     @property
     def color_profile(self) -> Optional[object]:
         """Embedded ICC color profile, or None if not available."""
         self._check_open()
-        self._check_error()
         return None
 
     # ------------------------------------------------------------------
@@ -368,7 +482,6 @@ class OpenSlide:
     def get_best_level_for_downsample(self, downsample: float) -> int:
         """Get the best pyramid level for a given downsample factor."""
         self._check_open()
-        self._check_error()
         return self._index.get_best_level_for_downsample(downsample)
 
     def read_region(
@@ -389,80 +502,61 @@ class OpenSlide:
             PIL.Image.Image (RGBA).
         """
         self._check_open()
-        self._check_error()
 
-        try:
-            if level < 0 or level >= self._index.level_count:
-                raise OpenSlideError(f"Invalid level {level}")
+        if level < 0 or level >= self._index.level_count:
+            raise OpenSlideError(f"Invalid level {level}")
 
-            scale = self._index.level_scales[level]
-            ds = self._info.header.scan_scale / scale
+        scale = self._index.level_scales[level]
+        ds = self._info.header.scan_scale / scale
 
-            x0, y0 = int(location[0] / ds), int(location[1] / ds)
-            w, h = int(size[0]), int(size[1])
+        x0, y0 = int(location[0] / ds), int(location[1] / ds)
+        w, h = int(size[0]), int(size[1])
 
-            out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            tile_size = self._index.tile_size
+        out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        tile_size = self._index.tile_size
 
-            tx_start = x0 // tile_size
-            ty_start = y0 // tile_size
-            tx_end = (x0 + w - 1) // tile_size + 1
-            ty_end = (y0 + h - 1) // tile_size + 1
+        tx_start = x0 // tile_size
+        ty_start = y0 // tile_size
+        tx_end = (x0 + w - 1) // tile_size + 1
+        ty_end = (y0 + h - 1) // tile_size + 1
 
-            if self._file_handle is None:
-                raise OpenSlideError("Slide is closed")
-            f = self._file_handle
+        if self._file_handle is None:
+            raise OpenSlideError("Slide is closed")
 
-            for ty in range(ty_start, ty_end):
-                for tx in range(tx_start, tx_end):
-                    tile_x = tx * tile_size
-                    tile_y = ty * tile_size
-                    key = (scale, tile_x, tile_y)
-                    idx = self._index.lookup.get(key)
-                    if idx is None:
-                        continue
+        for ty in range(ty_start, ty_end):
+            for tx in range(tx_start, tx_end):
+                tile_x = tx * tile_size
+                tile_y = ty * tile_size
+                key = (scale, tile_x, tile_y)
+                idx = self._index.lookup.get(key)
+                if idx is None:
+                    continue
 
-                    entry = self._index.entries[idx]
-                    tw, th = entry["width"], entry["height"]
+                entry = self._index.entries[idx]
+                tw, th = entry["width"], entry["height"]
 
-                    # Try cached decoded tile first.
-                    tile = self._tile_cache.get(idx)
-                    if tile is None:
-                        offset = self._index.offsets[idx]
-                        f.seek(offset)
-                        jpeg = f.read(entry["size"])
-                        tile = Image.open(io.BytesIO(jpeg)).convert("RGB")
+                tile = self._read_decoded_tile(idx)
 
-                        # Tile may be smaller than tile_size at image edges.
-                        if tile.size != (tw, th):
-                            tile = tile.resize((tw, th))
+                paste_x = tile_x - x0
+                paste_y = tile_y - y0
+                crop_x0 = max(0, x0 - tile_x)
+                crop_y0 = max(0, y0 - tile_y)
+                crop_x1 = min(tw, x0 + w - tile_x)
+                crop_y1 = min(th, y0 + h - tile_y)
 
-                        self._tile_cache.put(idx, tile)
+                if crop_x1 > crop_x0 and crop_y1 > crop_y0:
+                    cropped = tile.crop((crop_x0, crop_y0, crop_x1, crop_y1))
+                    cropped_rgba = cropped.convert("RGBA")
+                    out.paste(
+                        cropped_rgba,
+                        (paste_x + crop_x0, paste_y + crop_y0),
+                    )
 
-                    paste_x = tile_x - x0
-                    paste_y = tile_y - y0
-                    crop_x0 = max(0, x0 - tile_x)
-                    crop_y0 = max(0, y0 - tile_y)
-                    crop_x1 = min(tw, x0 + w - tile_x)
-                    crop_y1 = min(th, y0 + h - tile_y)
-
-                    if crop_x1 > crop_x0 and crop_y1 > crop_y0:
-                        cropped = tile.crop((crop_x0, crop_y0, crop_x1, crop_y1))
-                        cropped_rgba = cropped.convert("RGBA")
-                        out.paste(
-                            cropped_rgba,
-                            (paste_x + crop_x0, paste_y + crop_y0),
-                        )
-
-            return out
-        except Exception:
-            self._error = True
-            raise
+        return out
 
     def get_thumbnail(self, size: Tuple[int, int]) -> Image.Image:
         """Get a thumbnail image."""
         self._check_open()
-        self._check_error()
 
         thumb = None
         try:
@@ -488,7 +582,6 @@ class OpenSlide:
         per-slide LRU cache. Accepts the cache argument for API compatibility.
         """
         self._check_open()
-        self._check_error()
         # No-op for now. Could be extended to use a shared cache.
         pass
 

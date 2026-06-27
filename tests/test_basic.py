@@ -228,3 +228,199 @@ def test_level_properties_consistency():
                 expected_h = slide.dimensions[1] / ds
                 assert abs(w - expected_w) <= 2
                 assert abs(h - expected_h) <= 2
+
+
+# ---------------------------------------------------------------------------
+# Tile index self-healing and error handling tests
+# ---------------------------------------------------------------------------
+
+
+def _get_healing_test_path():
+    """Return a KFB path usable for corruption/self-healing tests."""
+    candidates = [
+        os.environ.get("KFB_TEST_FILE"),
+        os.path.join(os.path.dirname(__file__), "sample.kfb"),
+        "/home/fengyifan/disk/code/escc-h2ihc/data/he_anno/1046961-3/1046961-3.kfb",
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            return p
+    return None
+
+
+def test_real_world_tile_index_corruption():
+    """Regression test for patient 1046961-3 tile index corruption.
+
+    The KFB file contains two adjacent corrupt tile index entries. kfbslide
+    should detect the invalid JPEG stream, recover the correct byte range, and
+    return the requested region without latching the slide into an error state.
+    """
+    path = "/home/fengyifan/disk/code/escc-h2ihc/data/he_anno/1046961-3/1046961-3.kfb"
+    if not os.path.exists(path):
+        pytest.skip("Patient 1046961-3 KFB not available")
+
+    failing_patches = [
+        (66048, 18432),
+        (66560, 18432),
+        (66048, 25088),
+        (66560, 25088),
+    ]
+
+    with OpenSlide(path) as slide:
+        for x, y in failing_patches:
+            img = slide.read_region((x, y), 0, (512, 512))
+            assert img.mode == "RGBA"
+            assert img.size == (512, 512)
+
+
+def test_tile_decode_error_does_not_latch():
+    """A single unrecoverable tile should not poison the whole slide handle."""
+    path = _get_healing_test_path()
+    if not path:
+        pytest.skip("No KFB test file available")
+
+    with OpenSlide(path) as slide:
+        # Pick a full-size tile index near the start of the data.
+        idx = 0
+        while idx < len(slide._index.entries):
+            entry = slide._index.entries[idx]
+            if entry["width"] == slide._index.tile_size and entry["height"] == slide._index.tile_size:
+                break
+            idx += 1
+        else:
+            pytest.skip("Could not find a full-size tile")
+
+        real_offset = slide._index.offsets[idx]
+        real_size = slide._index.entries[idx]["size"]
+
+        # Corrupt the tile so it cannot be decoded or healed.
+        slide._index.entries[idx]["size"] = 4
+        slide._index.offsets[idx] = 0
+
+        try:
+            with pytest.raises(Exception):
+                slide.read_region(
+                    (slide._index.entries[idx]["x"], slide._index.entries[idx]["y"]),
+                    0,
+                    (slide._index.tile_size, slide._index.tile_size),
+                )
+        finally:
+            slide._index.entries[idx]["size"] = real_size
+            slide._index.offsets[idx] = real_offset
+
+        # Slide should still be usable.
+        region = slide.read_region(
+            (slide._index.entries[idx]["x"], slide._index.entries[idx]["y"]),
+            0,
+            (slide._index.tile_size, slide._index.tile_size),
+        )
+        assert region.mode == "RGBA"
+        assert region.size == (slide._index.tile_size, slide._index.tile_size)
+
+
+def test_self_healing_cumulative_offsets_remain_consistent():
+    """Healing a tile must keep the cumulative offset table consistent."""
+    path = _get_healing_test_path()
+    if not path:
+        pytest.skip("No KFB test file available")
+
+    with OpenSlide(path) as slide:
+        idx = 0
+        while idx + 1 < len(slide._index.entries):
+            e = slide._index.entries[idx]
+            e_next = slide._index.entries[idx + 1]
+            if (
+                e["width"] == slide._index.tile_size
+                and e["height"] == slide._index.tile_size
+                and e_next["width"] == slide._index.tile_size
+                and e_next["height"] == slide._index.tile_size
+            ):
+                break
+            idx += 1
+        else:
+            pytest.skip("Could not find two adjacent full-size tiles")
+
+        old_size = slide._index.entries[idx]["size"]
+        old_next_size = slide._index.entries[idx + 1]["size"]
+
+        # Corruption: tile N's size is too small by 1024 bytes.
+        shift = 1024
+        slide._index.entries[idx]["size"] -= shift
+        slide._index.entries[idx + 1]["size"] -= shift
+        # Note: we intentionally do not shift offsets[idx+1] here; the
+        # self-healing for tile N will recompute all subsequent offsets.
+
+        try:
+            # Read tile N (triggers healing).
+            region = slide.read_region(
+                (slide._index.entries[idx]["x"], slide._index.entries[idx]["y"]),
+                0,
+                (slide._index.tile_size, slide._index.tile_size),
+            )
+            assert region.mode == "RGBA"
+            assert region.size == (slide._index.tile_size, slide._index.tile_size)
+
+            # Read tile N+1 to verify the cumulative offset table is still
+            # consistent after healing.
+            region_next = slide.read_region(
+                (slide._index.entries[idx + 1]["x"], slide._index.entries[idx + 1]["y"]),
+                0,
+                (slide._index.tile_size, slide._index.tile_size),
+            )
+            assert region_next.mode == "RGBA"
+            assert region_next.size == (slide._index.tile_size, slide._index.tile_size)
+        finally:
+            slide._index.entries[idx]["size"] = old_size
+            slide._index.entries[idx + 1]["size"] = old_next_size
+            # Recompute offsets to restore original state.
+            cumulative = slide._index.offsets[idx]
+            for i in range(idx, len(slide._index.offsets)):
+                slide._index.offsets[i] = cumulative
+                cumulative += slide._index.entries[i]["size"]
+
+
+def test_self_healing_simulated_adjacent_corruption():
+    """Simulate adjacent corrupt tile index entries and verify recovery."""
+    path = _get_healing_test_path()
+    if not path:
+        pytest.skip("No KFB test file available")
+
+    with OpenSlide(path) as slide:
+        idx = 0
+        while idx + 1 < len(slide._index.entries):
+            e = slide._index.entries[idx]
+            e_next = slide._index.entries[idx + 1]
+            if (
+                e["width"] == slide._index.tile_size
+                and e["height"] == slide._index.tile_size
+                and e_next["width"] == slide._index.tile_size
+                and e_next["height"] == slide._index.tile_size
+            ):
+                break
+            idx += 1
+        else:
+            pytest.skip("Could not find two adjacent full-size tiles")
+
+        old_size = slide._index.entries[idx]["size"]
+        old_next_offset = slide._index.offsets[idx + 1]
+        old_next_size = slide._index.entries[idx + 1]["size"]
+
+        # Simulate the real-world corruption pattern: tile N's size is too
+        # small and tile N+1's offset is shifted forward by the same amount.
+        shift = 1024
+        slide._index.entries[idx]["size"] -= shift
+        slide._index.offsets[idx + 1] += shift
+        slide._index.entries[idx + 1]["size"] -= shift
+
+        try:
+            region = slide.read_region(
+                (slide._index.entries[idx]["x"], slide._index.entries[idx]["y"]),
+                0,
+                (slide._index.tile_size, slide._index.tile_size),
+            )
+            assert region.mode == "RGBA"
+            assert region.size == (slide._index.tile_size, slide._index.tile_size)
+        finally:
+            slide._index.entries[idx]["size"] = old_size
+            slide._index.offsets[idx + 1] = old_next_offset
+            slide._index.entries[idx + 1]["size"] = old_next_size
