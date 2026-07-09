@@ -296,6 +296,10 @@ class OpenSlide:
         small window for a valid JPEG SOI/EOI pair and, if found, updates the
         in-memory index so the tile (and its neighbors) can be read correctly.
 
+        If the JPEG stream itself is corrupt, the tile cannot be recovered, but
+        the index is still repaired so that the failure does not poison reads of
+        the following tiles.
+
         If recovery fails, the original exception is re-raised.
         """
         if self._file_handle is None:
@@ -305,10 +309,16 @@ class OpenSlide:
         recorded_size = self._index.entries[idx]["size"]
         file_size = self._file_size()
 
-        # Search a small window around the recorded byte range. The real-world
-        # corruption seen so far shifts data by at most a few KB.
+        # Limit recovery to a reasonable JPEG size so we never interpret the
+        # next tile's data as part of this tile. Typical 256x256 RGB JPEG tiles
+        # are a few KB; allow up to 512 KB as a generous upper bound.
+        max_tile_jpeg_size = max(512 * 1024, recorded_size * 4)
+
+        # Search a window around the recorded byte range. The SOI must lie within
+        # the recorded tile range or shortly before it; otherwise it belongs to a
+        # neighboring tile.
         search_start = max(0, offset - 2048)
-        search_end = min(offset + recorded_size + 2048, file_size)
+        search_end = min(offset + max_tile_jpeg_size, file_size)
         if search_end <= search_start:
             raise exc
 
@@ -317,66 +327,93 @@ class OpenSlide:
         if len(window) < 4:
             raise exc
 
-        # Locate JPEG SOI markers (0xFFD8) and prefer the one closest to the
-        # recorded offset, since that is most likely the intended tile.
+        recorded_rel = offset - search_start
+
+        # Locate JPEG SOI markers that could belong to this tile.
         soi_positions = []
         start = 0
         while True:
             pos = window.find(b"\xff\xd8", start)
             if pos == -1:
                 break
-            soi_positions.append(pos)
+            # SOI must be at or before the end of the recorded tile data, and
+            # not more than 2048 bytes before the recorded offset.
+            if recorded_rel - 2048 <= pos <= recorded_rel + recorded_size:
+                soi_positions.append(pos)
             start = pos + 2
 
-        if not soi_positions:
-            raise exc
+        if soi_positions:
+            # Prefer the SOI closest to the recorded offset.
+            soi_positions.sort(key=lambda p: abs(p - recorded_rel))
 
-        recorded_rel = offset - search_start
-        soi_positions.sort(key=lambda p: abs(p - recorded_rel))
+            for soi_pos in soi_positions:
+                soi_abs = search_start + soi_pos
+                # EOI must be after the SOI and within the reasonable tile size.
+                eoi_search_end = min(len(window), soi_pos + max_tile_jpeg_size)
+                eoi_pos = window.find(b"\xff\xd9", soi_pos + 2, eoi_search_end)
+                if eoi_pos == -1:
+                    continue
+                eoi_abs = search_start + eoi_pos + 2  # include EOI marker
+                actual_size = eoi_abs - soi_abs
+                if actual_size <= 0:
+                    continue
 
-        for soi_pos in soi_positions:
-            soi_abs = search_start + soi_pos
-            eoi_pos = window.find(b"\xff\xd9", soi_pos + 2)
-            if eoi_pos == -1:
-                continue
-            eoi_abs = search_start + eoi_pos + 2  # include EOI marker
-            actual_size = eoi_abs - soi_abs
-            if actual_size <= 0:
-                continue
+                try:
+                    self._file_handle.seek(soi_abs)
+                    data = self._file_handle.read(actual_size)
+                    tile = Image.open(io.BytesIO(data)).convert("RGB")
+                except Exception:
+                    continue
 
-            try:
-                self._file_handle.seek(soi_abs)
-                data = self._file_handle.read(actual_size)
-                tile = Image.open(io.BytesIO(data)).convert("RGB")
-            except Exception:
-                continue
+                # Update in-memory index entries. The recovered tile may take
+                # bytes from the previous tile or give bytes to the next tile,
+                # so adjust neighbors accordingly and recompute cumulative offsets.
+                old_offset = offset
+                old_size = recorded_size
 
-            # Update in-memory index entries. The recovered tile may take bytes
-            # from the previous tile or give bytes to the next tile, so adjust
-            # neighbors accordingly and recompute cumulative offsets.
-            old_offset = offset
-            old_size = recorded_size
+                self._index.offsets[idx] = soi_abs
+                self._index.entries[idx]["size"] = actual_size
 
-            self._index.offsets[idx] = soi_abs
-            self._index.entries[idx]["size"] = actual_size
+                delta_start = soi_abs - old_offset
+                delta_end = (soi_abs + actual_size) - (old_offset + old_size)
 
-            delta_start = soi_abs - old_offset
-            delta_end = (soi_abs + actual_size) - (old_offset + old_size)
+                if idx > 0 and delta_start != 0:
+                    self._index.entries[idx - 1]["size"] += delta_start
 
-            if idx > 0 and delta_start != 0:
-                self._index.entries[idx - 1]["size"] += delta_start
+                if idx + 1 < len(self._index.entries):
+                    self._index.entries[idx + 1]["size"] -= delta_end
 
-            if idx + 1 < len(self._index.entries):
-                self._index.entries[idx + 1]["size"] -= delta_end
+                # Recompute cumulative offsets from idx+1 onwards to keep the
+                # entire offset table consistent.
+                cumulative = self._index.offsets[idx] + self._index.entries[idx]["size"]
+                for i in range(idx + 1, len(self._index.offsets)):
+                    self._index.offsets[i] = cumulative
+                    cumulative += self._index.entries[i]["size"]
 
-            # Recompute cumulative offsets from idx+1 onwards to keep the
-            # entire offset table consistent.
-            cumulative = self._index.offsets[idx] + self._index.entries[idx]["size"]
-            for i in range(idx + 1, len(self._index.offsets)):
-                self._index.offsets[i] = cumulative
-                cumulative += self._index.entries[i]["size"]
+                return tile
 
-            return tile
+        # No decodable JPEG found within this tile's recorded range. The JPEG
+        # stream itself may be corrupt, or the index size is wrong. Try to
+        # locate the next tile boundary (the next SOI after the recorded offset)
+        # so that subsequent tiles are not affected by an incorrect size.
+        next_soi_pos = window.find(b"\xff\xd8", recorded_rel + 1)
+        if next_soi_pos != -1:
+            next_soi_abs = search_start + next_soi_pos
+            if 0 < next_soi_abs - offset <= max_tile_jpeg_size:
+                old_size = recorded_size
+                new_size = next_soi_abs - offset
+
+                self._index.entries[idx]["size"] = new_size
+
+                delta_end = new_size - old_size
+                if idx + 1 < len(self._index.entries):
+                    self._index.entries[idx + 1]["size"] -= delta_end
+
+                # Recompute cumulative offsets from idx+1 onwards.
+                cumulative = self._index.offsets[idx] + self._index.entries[idx]["size"]
+                for i in range(idx + 1, len(self._index.offsets)):
+                    self._index.offsets[i] = cumulative
+                    cumulative += self._index.entries[i]["size"]
 
         raise exc
 

@@ -12,7 +12,7 @@ Author: Yifan Feng <evanfeng97@gmail.com>
 
 import struct
 from dataclasses import dataclass
-from typing import List, Optional, Dict
+from typing import List, Optional
 
 
 @dataclass

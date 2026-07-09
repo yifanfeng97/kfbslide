@@ -11,15 +11,15 @@ from PIL import Image
 
 import kfbslide
 from kfbslide import (
+    PROPERTY_NAME_MPP_X,
+    PROPERTY_NAME_MPP_Y,
+    PROPERTY_NAME_VENDOR,
+    KfbError,
+    KfbSlide,
     OpenSlide,
     OpenSlideError,
     OpenSlideUnsupportedFormatError,
-    KfbSlide,
     open_slide,
-    KfbError,
-    PROPERTY_NAME_VENDOR,
-    PROPERTY_NAME_MPP_X,
-    PROPERTY_NAME_MPP_Y,
 )
 
 # Directory for test output images (gitignored)
@@ -284,7 +284,10 @@ def test_tile_decode_error_does_not_latch():
         idx = 0
         while idx < len(slide._index.entries):
             entry = slide._index.entries[idx]
-            if entry["width"] == slide._index.tile_size and entry["height"] == slide._index.tile_size:
+            if (
+                entry["width"] == slide._index.tile_size
+                and entry["height"] == slide._index.tile_size
+            ):
                 break
             idx += 1
         else:
@@ -424,3 +427,34 @@ def test_self_healing_simulated_adjacent_corruption():
             slide._index.entries[idx]["size"] = old_size
             slide._index.offsets[idx + 1] = old_next_offset
             slide._index.entries[idx + 1]["size"] = old_next_size
+
+
+def test_corrupt_tile_boundary_repair():
+    """Regression test for corrupt tile that poisons the next tile's offset.
+
+    In some KFB files a tile's recorded size is too small and the JPEG stream
+    itself is also corrupt. The corrupt tile cannot be recovered, but the
+    reader must still locate the next tile boundary so that the following tile
+    (whose offset was wrong) can be decoded correctly.
+    """
+    path = os.path.join(os.path.dirname(__file__), "data", "133923-3.kfb")
+    if not os.path.exists(path):
+        pytest.skip("133923-3.kfb not available")
+
+    with OpenSlide(path) as slide:
+        # Tile at (23552, 28416) has a corrupt JPEG stream and a recorded size
+        # that is smaller than the real data range, so tile (24064, 6400) used
+        # to start in the middle of the corrupt tile's data.
+        with pytest.raises(Exception):
+            slide.read_region((23552, 28416), 0, (256, 256))
+
+        # After the failed read, the boundary should be repaired and the next
+        # tile must be readable.
+        region = slide.read_region((24064, 6400), 0, (256, 256))
+        assert region.mode == "RGBA"
+        assert region.size == (256, 256)
+
+        # A tile further downstream should also remain readable.
+        region = slide.read_region((24320, 6400), 0, (256, 256))
+        assert region.mode == "RGBA"
+        assert region.size == (256, 256)

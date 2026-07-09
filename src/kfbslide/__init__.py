@@ -12,16 +12,16 @@ Drop-in replacement usage:
     slide = openslide.OpenSlide("sample.kfb")
 """
 
-from ._slide import OpenSlide, KfbSlide, open_slide
 from ._exceptions import (
+    KfbError,
+    KfbOpenError,
+    KfbUnsupportedFormatError,
     OpenSlideError,
     OpenSlideUnsupportedFormatError,
-    KfbError,
-    KfbUnsupportedFormatError,
-    KfbOpenError,
 )
+from ._slide import KfbSlide, OpenSlide, open_slide
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 # Standard OpenSlide property name constants
 PROPERTY_NAME_VENDOR = "openslide.vendor"
