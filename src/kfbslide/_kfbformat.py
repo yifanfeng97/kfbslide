@@ -179,6 +179,16 @@ def parse_kfb_file(path: str) -> KfbFileInfo:
         # 先读取前 1MB（通常足够包含文件头）
         data = bytearray(f.read(1024 * 1024))
 
+        # Detect empty or zero-filled files early to give a clearer error.
+        if len(data) == 0:
+            raise ValueError("Invalid KFB file: file is empty")
+        # A valid KFB header starts with a non-zero section marker; if the
+        # first kilobyte is all zeros, the file is almost certainly corrupted.
+        if data[:1024].count(0) == len(data[:1024]):
+            raise ValueError(
+                "Invalid KFB file: file appears to be zero-filled or corrupted"
+            )
+
         # 读取 section 0x01
         sec1 = _read_section(data, 0)
         if not sec1 or sec1.sec_type != 0x01:

@@ -21,7 +21,7 @@ from ._exceptions import (
 )
 from ._slide import KfbSlide, OpenSlide, open_slide
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 # Standard OpenSlide property name constants
 PROPERTY_NAME_VENDOR = "openslide.vendor"

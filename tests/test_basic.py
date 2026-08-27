@@ -62,6 +62,14 @@ def test_open_invalid_file(tmp_path):
         OpenSlide(str(bad))
 
 
+def test_open_zero_filled_file(tmp_path):
+    """Opening a zero-filled file gives a clear error message."""
+    bad = tmp_path / "zero.kfb"
+    bad.write_bytes(b"\x00" * 2048)
+    with pytest.raises(OpenSlideUnsupportedFormatError, match="zero-filled"):
+        OpenSlide(str(bad))
+
+
 def test_backward_compatibility_aliases():
     """Old names still point to the new ones."""
     assert KfbSlide is OpenSlide
@@ -458,3 +466,80 @@ def test_corrupt_tile_boundary_repair():
         region = slide.read_region((24320, 6400), 0, (256, 256))
         assert region.mode == "RGBA"
         assert region.size == (256, 256)
+
+
+# ---------------------------------------------------------------------------
+# Multiprocessing (PyTorch DataLoader-style) regression test
+# ---------------------------------------------------------------------------
+
+
+def _fork_read_worker(slide, coords, n_reads, err_queue):
+    """Run in a forked child process: read regions from the inherited slide."""
+    try:
+        parent_pid = slide._pid
+        for i in range(n_reads):
+            x, y = coords[i % len(coords)]
+            img = slide.read_region((x, y), 0, (256, 256))
+            assert img.mode == "RGBA"
+            assert img.size == (256, 256)
+        # The file handle must have been reopened in this child process.
+        assert slide._pid != parent_pid
+        assert slide._pid == os.getpid()
+        err_queue.put(None)
+    except Exception as e:  # noqa: BLE001
+        err_queue.put(f"{type(e).__name__}: {e}")
+
+
+def test_read_region_from_forked_workers():
+    """A slide opened in the parent must be readable from forked children.
+
+    Regression test for https://github.com/yifanfeng97/kfbslide/issues/1
+    PyTorch DataLoader forks worker processes; the inherited file handle
+    shares the OS-level file offset, so concurrent seek/read corrupted the
+    JPEG stream ("cannot identify image file"). kfbslide now reopens the
+    file handle per process.
+    """
+    path = _get_sample_path()
+    if not path:
+        pytest.skip("No KFB test file available")
+
+    import multiprocessing as mp
+    import queue as queue_module
+
+    try:
+        ctx = mp.get_context("fork")
+    except ValueError:
+        pytest.skip("fork start method not available")
+
+    slide = OpenSlide(path)
+    w0, h0 = slide.dimensions
+    coords = [
+        (0, 0),
+        (min(4096, max(0, w0 - 256)), min(4096, max(0, h0 - 256))),
+        (max(0, w0 // 2), max(0, h0 // 2)),
+        (max(0, w0 - 256), max(0, h0 - 256)),
+    ]
+
+    n_workers, n_reads = 8, 25
+    err_queue = ctx.Queue()
+    procs = [
+        ctx.Process(
+            target=_fork_read_worker, args=(slide, coords, n_reads, err_queue)
+        )
+        for _ in range(n_workers)
+    ]
+    for p in procs:
+        p.start()
+
+    errors = []
+    for _ in procs:
+        try:
+            errors.append(err_queue.get(timeout=120))
+        except queue_module.Empty:
+            errors.append("worker did not report")
+    for p in procs:
+        p.join(timeout=120)
+    slide.close()
+
+    assert all(p.exitcode == 0 for p in procs)
+    assert errors == [None] * n_workers

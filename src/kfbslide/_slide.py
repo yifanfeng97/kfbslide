@@ -196,6 +196,7 @@ class OpenSlide:
         "_closed",
         "_tile_cache",
         "_file_handle",
+        "_pid",
         "_info",
         "_index",
         "_properties",
@@ -207,6 +208,7 @@ class OpenSlide:
         self._closed = False
         self._tile_cache = _LRUCache(256)
         self._file_handle: Optional[io.BufferedReader] = None
+        self._pid = os.getpid()
 
         try:
             self._info = parse_kfb_file(filename)
@@ -248,7 +250,7 @@ class OpenSlide:
         self._associated_images = _AssociatedImageMap(
             filename,
             self._info.assoc_images,
-            file_handle_getter=lambda: self._file_handle
+            file_handle_getter=lambda: self._ensure_open_handle()
             if not self._closed
             else None,
         )
@@ -281,11 +283,34 @@ class OpenSlide:
         if self._closed:
             raise OpenSlideError("Slide is closed")
 
+    def _ensure_open_handle(self) -> io.BufferedReader:
+        """Return a file handle valid in the current process.
+
+        The handle is reopened if the slide object was inherited by a forked
+        process (e.g. a PyTorch DataLoader worker). After fork, child
+        processes share the parent's OS-level file offset, so concurrent
+        seek/read on the inherited handle corrupts the byte stream
+        (typically surfacing as PIL "cannot identify image file").
+        """
+        if self._closed:
+            raise OpenSlideError("Slide is closed")
+        if self._file_handle is None or os.getpid() != self._pid:
+            if self._file_handle is not None:
+                try:
+                    self._file_handle.close()
+                except Exception:
+                    pass
+            try:
+                self._file_handle = open(self._filename, "rb")
+            except Exception as e:
+                raise OpenSlideError(f"Failed to reopen file handle: {e}")
+            self._pid = os.getpid()
+        return self._file_handle
+
     def _file_size(self) -> int:
         """Return the size of the underlying file."""
-        if self._file_handle is None:
-            return 0
-        return os.fstat(self._file_handle.fileno()).st_size
+        fh = self._ensure_open_handle()
+        return os.fstat(fh.fileno()).st_size
 
     def _try_heal_tile(self, idx: int, exc: Exception) -> Image.Image:
         """Attempt to recover a tile whose index entry points to invalid JPEG data.
@@ -302,7 +327,9 @@ class OpenSlide:
 
         If recovery fails, the original exception is re-raised.
         """
-        if self._file_handle is None:
+        try:
+            fh = self._ensure_open_handle()
+        except OpenSlideError:
             raise exc
 
         offset = self._index.offsets[idx]
@@ -322,8 +349,8 @@ class OpenSlide:
         if search_end <= search_start:
             raise exc
 
-        self._file_handle.seek(search_start)
-        window = self._file_handle.read(search_end - search_start)
+        fh.seek(search_start)
+        window = fh.read(search_end - search_start)
         if len(window) < 4:
             raise exc
 
@@ -359,8 +386,8 @@ class OpenSlide:
                     continue
 
                 try:
-                    self._file_handle.seek(soi_abs)
-                    data = self._file_handle.read(actual_size)
+                    fh.seek(soi_abs)
+                    data = fh.read(actual_size)
                     tile = Image.open(io.BytesIO(data)).convert("RGB")
                 except Exception:
                     continue
@@ -423,16 +450,15 @@ class OpenSlide:
         if tile is not None:
             return tile
 
-        if self._file_handle is None:
-            raise OpenSlideError("Slide is closed")
+        fh = self._ensure_open_handle()
 
         entry = self._index.entries[idx]
         tw, th = entry["width"], entry["height"]
 
         offset = self._index.offsets[idx]
         size = entry["size"]
-        self._file_handle.seek(offset)
-        jpeg = self._file_handle.read(size)
+        fh.seek(offset)
+        jpeg = fh.read(size)
 
         try:
             tile = Image.open(io.BytesIO(jpeg)).convert("RGB")
@@ -557,8 +583,9 @@ class OpenSlide:
         tx_end = (x0 + w - 1) // tile_size + 1
         ty_end = (y0 + h - 1) // tile_size + 1
 
-        if self._file_handle is None:
-            raise OpenSlideError("Slide is closed")
+        # Ensure a per-process file handle (reopens after fork, e.g. in
+        # PyTorch DataLoader worker processes).
+        self._ensure_open_handle()
 
         for ty in range(ty_start, ty_end):
             for tx in range(tx_start, tx_end):
