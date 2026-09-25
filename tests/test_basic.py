@@ -5,6 +5,7 @@ Author: Yifan Feng <evanfeng97@gmail.com>
 
 import collections.abc
 import os
+import struct
 
 import pytest
 from PIL import Image
@@ -21,6 +22,7 @@ from kfbslide import (
     OpenSlideUnsupportedFormatError,
     open_slide,
 )
+from kfbslide._kfbformat import KfbSection, _parse_header, parse_kfb_file
 
 # Directory for test output images (gitignored)
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cache")
@@ -543,3 +545,197 @@ def test_read_region_from_forked_workers():
 
     assert all(p.exitcode == 0 for p in procs)
     assert errors == [None] * n_workers
+
+
+# ---------------------------------------------------------------------------
+# Large file (>4 GiB) regression tests: index table locators are u64
+# ---------------------------------------------------------------------------
+
+# Values decoded from a real 5,438,911,670-byte KFB file (scanner-produced).
+# tile_index_end:  low dword 0x442F21C0 at payload 0x38, high dword 1 at 0x3C
+# tile_index_start: low dword 0x42C18A40 at payload 0x40, high dword 1 at 0x44
+_REAL_U64_IDX_END = 5_438_906_816
+_REAL_U64_IDX_START = 5_414_947_392
+
+
+def _make_header_payload(
+    tile_count: int,
+    height: int,
+    width: int,
+    idx_end: int,
+    idx_start: int,
+    tile_size: int = 256,
+) -> bytes:
+    """Build an 88-byte KFB section 0x01 payload."""
+    p = bytearray(88)
+    p[0:4] = b"KFB\x00"
+    p[8:12] = struct.pack("<f", 1.6)
+    p[12:16] = struct.pack("<I", tile_count)
+    p[16:20] = struct.pack("<I", height)
+    p[20:24] = struct.pack("<I", width)
+    p[24:28] = struct.pack("<I", 40)
+    p[28:32] = b"JPEG"
+    p[40:48] = struct.pack("<q", 0)
+    p[48:52] = struct.pack("<I", 220)  # section_0x02_offset
+    p[52:56] = struct.pack("<I", 0)  # no label image
+    p[56:64] = struct.pack("<Q", idx_end)
+    p[64:72] = struct.pack("<Q", idx_start)
+    p[72:76] = struct.pack("<f", 0.25)
+    p[84:88] = struct.pack("<I", tile_size)
+    return bytes(p)
+
+
+def test_header_index_locators_are_u64():
+    """Index table locators must decode as little-endian u64.
+
+    Regression test: a >4 GiB KFB file has its tile index table beyond the
+    2^32 boundary; the two locator fields in the header are 64-bit LE
+    integers whose high dwords sit at payload offsets 0x3C and 0x44.
+    Reading them as u32 wraps the offset and the parser then interprets
+    tile JPEG data as an index table (garbage level_count/dimensions).
+    """
+    payload = _make_header_payload(
+        tile_count=374_366,
+        height=125_264,
+        width=147_433,
+        idx_end=_REAL_U64_IDX_END,
+        idx_start=_REAL_U64_IDX_START,
+    )
+    section = KfbSection(
+        sec_type=0x01, marker=0xF1, offset=0, footer_pos=92, payload=payload
+    )
+    header = _parse_header(section)
+    assert header.tile_index_end == _REAL_U64_IDX_END
+    assert header.tile_index_start == _REAL_U64_IDX_START
+
+
+def test_header_index_locators_backward_compatible_u32():
+    """Files below 4 GiB have zero high dwords; u64 decode keeps old values."""
+    legacy_end = 1_469_244_117
+    legacy_start = 1_461_866_965
+    payload = _make_header_payload(
+        tile_count=115_268,
+        height=60_363,
+        width=93_656,
+        idx_end=legacy_end,
+        idx_start=legacy_start,
+    )
+    section = KfbSection(
+        sec_type=0x01, marker=0xF1, offset=0, footer_pos=92, payload=payload
+    )
+    header = _parse_header(section)
+    assert header.tile_index_end == legacy_end
+    assert header.tile_index_start == legacy_start
+
+
+def _build_synthetic_kfb(path: str, idx_start: int) -> None:
+    """Build a minimal valid KFB file whose tile index sits at ``idx_start``.
+
+    Layout: section 0x01 (header) + section 0x02 (macro, 64x64 JPEG) +
+    two 256x256 tile JPEGs + the 2-entry tile index table at ``idx_start``.
+    """
+    import io as _io
+
+    buf = _io.BytesIO()
+    Image.new("RGB", (256, 256), (200, 30, 30)).save(buf, format="JPEG")
+    tile_jpeg = buf.getvalue()
+    buf = _io.BytesIO()
+    Image.new("RGB", (64, 64), (30, 200, 30)).save(buf, format="JPEG")
+    macro_jpeg = buf.getvalue()
+
+    tile_count = 2
+    idx_end = idx_start + tile_count * 64
+
+    with open(path, "wb") as f:
+        # Section 0x01: marker + 88-byte payload + footer.
+        f.write(b"\xf1\x01\xee\xee")
+        f.write(
+            _make_header_payload(
+                tile_count=tile_count,
+                height=512,
+                width=512,
+                idx_end=idx_end,
+                idx_start=idx_start,
+            )
+        )
+        f.write(b"\xff\x01\xee\xee")
+
+        # Section 0x02 (macro): marker + 64-byte payload + footer, followed
+        # by the macro JPEG; rel_offset points at the JPEG data.
+        sec2_off = 220
+        sec2_payload_len = 64
+        macro_data_off = sec2_off + 4 + sec2_payload_len + 4  # + footer
+        f.seek(sec2_off)
+        f.write(b"\xf2\x02\xee\xee")
+        p = bytearray(sec2_payload_len)
+        p[4:8] = struct.pack("<I", 64)  # height
+        p[8:12] = struct.pack("<I", 64)  # width
+        p[16:20] = struct.pack("<I", len(macro_jpeg))  # data_length
+        p[20:24] = struct.pack("<I", macro_data_off - sec2_off)  # rel_offset
+        f.write(p)
+        f.write(b"\xff\x02\xee\xee")
+        f.write(macro_jpeg)
+
+        # Two tile JPEGs, contiguous; the parser locates them by scanning
+        # for the JPEG SOI after the macro image.
+        tile_data_off = f.tell()
+        f.write(tile_jpeg)
+        f.write(tile_jpeg)
+
+        # Tile index table beyond 2^32 (sparse file hole in between).
+        entries = [
+            (0, 0),  # x, y of tile 1
+            (256, 0),  # x, y of tile 2
+        ]
+        f.truncate(idx_start)
+        f.seek(idx_start)
+        for x, y in entries:
+            e = bytearray(64)
+            e[4:8] = struct.pack("<I", x)
+            e[8:12] = struct.pack("<I", y)
+            e[12:16] = struct.pack("<I", 256)  # width
+            e[16:20] = struct.pack("<I", 256)  # height
+            e[20:24] = struct.pack("<f", 40.0)  # scale
+            e[32:36] = struct.pack("<I", len(tile_jpeg))  # size
+            f.write(e)
+        assert f.tell() == idx_end
+    return tile_data_off
+
+
+def test_sparse_kfb_index_table_beyond_4gib(tmp_path):
+    """End-to-end: a KFB whose tile index lies past 2^32 must open correctly.
+
+    Regression test for the >4 GiB report (5,438,911,670-byte file,
+    level_count in the tens of thousands, 43-digit level-0 dimensions).
+    The synthetic file is sparse, so the 4 GiB hole costs no real disk.
+    """
+    import sys as _sys
+
+    if _sys.platform == "win32":
+        pytest.skip("sparse-file test relies on POSIX sparse allocation")
+
+    idx_start = 2**32 + 1024 * 1024
+    path = str(tmp_path / "large.kfb")
+    _build_synthetic_kfb(path, idx_start)
+
+    # Skip if the filesystem does not actually keep the file sparse.
+    if os.stat(path).st_blocks * 512 > 100 * 1024 * 1024:
+        pytest.skip("filesystem does not support sparse files")
+
+    info = parse_kfb_file(path)
+    assert info.header.tile_index_start == idx_start
+    assert info.header.tile_count == 2
+
+    with OpenSlide(path) as slide:
+        # Exactly one pyramid level (single scale 40.0), correct dimensions.
+        assert slide.level_count == 1
+        assert slide.dimensions == (512, 512)
+        assert slide.level_downsamples == (1.0,)
+
+        region = slide.read_region((0, 0), 0, (256, 256))
+        assert region.mode == "RGBA"
+        assert region.size == (256, 256)
+
+        region = slide.read_region((256, 0), 0, (256, 256))
+        assert region.mode == "RGBA"
+        assert region.size == (256, 256)

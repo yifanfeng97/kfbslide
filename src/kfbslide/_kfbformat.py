@@ -43,11 +43,9 @@ class KfbHeader:
     # 以下为解析出的字段
     section_0x02_offset: int  # section 0x02 (macro) 在文件中的偏移
     section_0x03_offset: int  # section 0x03 (label) 在文件中的偏移
-    # 瓦片索引表范围
-    tile_index_start: int  # 索引表起始偏移
-    tile_index_end: int  # 索引表结束偏移
-    # 原始未知字段
-    _raw_field_0x3c: int
+    # 瓦片索引表范围（64 位 LE 绝对偏移；>4GB 文件的高 32 位非零）
+    tile_index_start: int  # 索引表起始偏移 (u64 @ payload 0x40)
+    tile_index_end: int  # 索引表结束偏移 (u64 @ payload 0x38)
     mpp: float  # microns per pixel
 
 
@@ -123,9 +121,9 @@ def _parse_header(section: KfbSection) -> KfbHeader:
         tile_size=struct.unpack("<I", p[84:88])[0],
         section_0x02_offset=struct.unpack("<I", p[48:52])[0],
         section_0x03_offset=struct.unpack("<I", p[52:56])[0],
-        tile_index_end=struct.unpack("<I", p[56:60])[0],
-        _raw_field_0x3c=struct.unpack("<I", p[60:64])[0],
-        tile_index_start=struct.unpack("<I", p[64:68])[0],
+        # 索引表定位字段为 64 位 LE 整数（低双字在前），>4GB 文件高 32 位非零
+        tile_index_end=struct.unpack("<Q", p[56:64])[0],
+        tile_index_start=struct.unpack("<Q", p[64:72])[0],
         mpp=struct.unpack("<f", p[72:76])[0],
     )
 
