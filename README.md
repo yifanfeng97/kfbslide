@@ -144,10 +144,12 @@ with openslide.OpenSlide("sample.kfb") as slide:
 | 方法 | 说明 |
 |------|------|
 | `read_region(location, level, size)` | 读取指定区域，返回 **RGBA** 图像 |
+| `read_regions(regions, max_workers=None)` | 线程池并行读取多个区域，按输入顺序返回 RGBA 图像列表 |
 | `get_best_level_for_downsample(downsample)` | 根据下采样倍数选择最佳层级 |
 | `get_thumbnail(size)` | 生成缩略图 |
 | `set_cache(cache)` | API 兼容方法（当前为 no-op） |
-| `close()` | 关闭并释放资源 |
+| `cache_info()` | 返回 tile 缓存统计：`entries` / `bytes` / `max_bytes` |
+| `close()` | 关闭并释放资源（含所有线程的文件句柄） |
 
 ### 属性常量
 
@@ -204,6 +206,33 @@ from kfbslide import (
 <p align="center">
   <img src="https://raw.githubusercontent.com/yifanfeng97/kfbslide/main/docs/benchmark_level_zh.png" alt="金字塔层级读取延迟" width="900">
 </p>
+
+---
+
+## 🧵 线程安全与并发
+
+自 0.3.4 起，**一个 `OpenSlide` 实例可以被多个线程并发调用**：
+
+- 每个线程持有独立的文件句柄（`threading.local`），并发 `read_region` 不存在 seek/read 竞争；
+- tile 缓存为**按字节限容**（默认 **256 MiB/实例**）且内部加锁，缓存 tile 为 RGBA（读路径免重复 alpha 转换）；
+- 索引解析、JPEG 解码（Pillow）与文件 I/O 均会释放 GIL，多线程流水线在 I/O 密集场景（网络盘/慢速挂载）收益明显；纯 Python 胶水代码仍受 GIL 限制；
+- fork 后子进程自动重开句柄，PyTorch DataLoader worker 场景继续可用。
+
+```python
+# 共享单实例多线程：0.3.4 起安全，推荐用于区域批量扫描
+slide = OpenSlide("slide.kfb")
+regions = [((x, y), 0, (448, 448)) for y in range(0, 4096, 448) for x in range(0, 4096, 448)]
+images = slide.read_regions(regions, max_workers=8)  # 库内线程池，按输入顺序返回
+print(slide.cache_info())  # {'entries': 64, 'bytes': 16777216, 'max_bytes': 268435456}
+```
+
+内存估算：
+
+- 共享单实例：所有线程共用一份缓存，峰值 ≈ `max_bytes`（默认 256 MiB）；
+- 每线程独立实例：N 线程 ≈ N 份缓存，峰值 ≈ `N × 256 MiB`；
+- 单 tile 缓存开销 ≈ `tile_size² × 4` 字节（RGBA；256px ≈ 256 KiB，512px ≈ 1 MiB）。
+
+> 若需关闭多线程安全带来的句柄开销（几乎可忽略），或旧版本（<0.3.4）下并发，请使用"每线程独立实例"模式——8 线程 × 独立实例在 NVMe 上实测约 10× 吞吐。
 
 ---
 

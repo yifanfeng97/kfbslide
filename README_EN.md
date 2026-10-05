@@ -144,10 +144,12 @@ Open a KFB file.
 | Method | Description |
 |--------|-------------|
 | `read_region(location, level, size)` | Read a region, returns **RGBA** image |
+| `read_regions(regions, max_workers=None)` | Read many regions on a thread pool; returns RGBA images in input order |
 | `get_best_level_for_downsample(downsample)` | Pick the best pyramid level for a given downsample factor |
 | `get_thumbnail(size)` | Generate a thumbnail |
 | `set_cache(cache)` | API-compatible no-op |
-| `close()` | Close and release resources |
+| `cache_info()` | Tile cache statistics: `entries` / `bytes` / `max_bytes` |
+| `close()` | Close and release resources (file handles of all threads) |
 
 ### Property constants
 
@@ -204,6 +206,33 @@ We ran a head-to-head comparison against OpenSlide reading SVS files (see `bench
 <p align="center">
   <img src="https://raw.githubusercontent.com/yifanfeng97/kfbslide/main/docs/benchmark_level_en.png" alt="Pyramid Level Read Latency" width="900">
 </p>
+
+---
+
+## 🧵 Thread Safety & Concurrency
+
+Since 0.3.4, **a single `OpenSlide` instance can be used concurrently from multiple threads**:
+
+- Each thread gets its own file handle (`threading.local`) — concurrent `read_region` calls never interleave seek/read;
+- The tile cache is **byte-bounded** (default **256 MiB per instance**) and internally locked; tiles are cached as RGBA (no repeated alpha conversion on the read path);
+- Index parsing, JPEG decoding (Pillow) and file I/O release the GIL, so a thread pipeline pays off on I/O-bound storage (network drives, slow mounts); pure-Python glue stays GIL-bound;
+- Handles are reopened automatically after fork — PyTorch DataLoader workers keep working.
+
+```python
+# One shared instance across threads: safe since 0.3.4, recommended for batch scans
+slide = OpenSlide("slide.kfb")
+regions = [((x, y), 0, (448, 448)) for y in range(0, 4096, 448) for x in range(0, 4096, 448)]
+images = slide.read_regions(regions, max_workers=8)  # in-library thread pool, order preserved
+print(slide.cache_info())  # {'entries': 64, 'bytes': 16777216, 'max_bytes': 268435456}
+```
+
+Memory estimation:
+
+- Shared instance: all threads share one cache, peak ≈ `max_bytes` (256 MiB default);
+- One instance per thread: N threads ≈ N caches, peak ≈ `N × 256 MiB`;
+- Per-tile cache cost ≈ `tile_size² × 4` bytes (RGBA; 256 px ≈ 256 KiB, 512 px ≈ 1 MiB).
+
+> On releases < 0.3.4 (or if you prefer), use one independent instance per thread — 8 threads × independent instances measured ~10× read throughput on NVMe.
 
 ---
 

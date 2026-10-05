@@ -5,8 +5,10 @@ Architecture:
 - File header parsing: Pure Python (cross-platform)
 - Associated images: Pure Python (read JPEG directly from file)
 - Tile reading: Pure Python via tile index table
-- Tile cache: LRU decoded-tile cache for repeated reads
+- Tile cache: byte-bounded LRU decoded-tile cache (default 256 MiB per instance)
 - JPEG decoding: Pillow (pure Python, no extra dependencies)
+- Thread safety: per-thread file handles and a locked LRU cache, so one
+  OpenSlide instance can be read concurrently from multiple threads
 
 Author: Yifan Feng <evanfeng97@gmail.com>
 """
@@ -14,14 +16,21 @@ Author: Yifan Feng <evanfeng97@gmail.com>
 import io
 import os
 import struct
+import threading
 from collections.abc import Mapping
-from typing import Dict, List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from PIL import Image
 
 from ._cache import _LRUCache
 from ._exceptions import OpenSlideError, OpenSlideUnsupportedFormatError
 from ._kfbformat import KfbAssocImage, KfbFileInfo, parse_kfb_file
+
+# Default per-instance tile cache budget. Cached tiles are RGBA, so an
+# entry of a tile_size x tile_size tile costs about tile_size**2 * 4 bytes
+# (256 px tiles -> ~256 KiB each; 512 px tiles -> ~1 MiB each).
+_DEFAULT_CACHE_BYTES = 256 * 1024 * 1024
 
 
 class _KfbPropertyMap(Mapping):
@@ -124,24 +133,26 @@ class _TileIndex:
             f.seek(idx_start)
             data = f.read(tile_count * 64)
 
-        self.entries: List[Dict] = []
-        self.lookup: Dict[Tuple[float, int, int], int] = {}
-        scales = set()
+        if len(data) < tile_count * 64:
+            raise ValueError(
+                f"Tile index truncated: expected {tile_count * 64} bytes "
+                f"at offset {idx_start}, got {len(data)}"
+            )
 
-        for i in range(tile_count):
-            off = i * 64
-            e = data[off : off + 64]
-            entry = {
-                "scale": struct.unpack("<f", e[20:24])[0],
-                "x": struct.unpack("<I", e[4:8])[0],
-                "y": struct.unpack("<I", e[8:12])[0],
-                "width": struct.unpack("<I", e[12:16])[0],
-                "height": struct.unpack("<I", e[16:20])[0],
-                "size": struct.unpack("<I", e[32:36])[0],
-            }
-            self.entries.append(entry)
-            self.lookup[(entry["scale"], entry["x"], entry["y"])] = i
-            scales.add(entry["scale"])
+        # Bulk-parse the 64-byte records with one C-level iter_unpack per
+        # entry (fields: x, y, width, height, scale, size) instead of six
+        # struct.unpack calls per entry in a Python loop — roughly an order
+        # of magnitude faster, which matters for lazy opens in worker
+        # threads where the GIL serializes this pure-Python work.
+        records = struct.iter_unpack("<4xIIIIf8xI28x", data)
+        self.entries: List[Dict] = [
+            {"scale": scale, "x": x, "y": y, "width": width, "height": height, "size": size}
+            for x, y, width, height, scale, size in records
+        ]
+        self.lookup: Dict[Tuple[float, int, int], int] = {
+            (e["scale"], e["x"], e["y"]): i for i, e in enumerate(self.entries)
+        }
+        scales = {e["scale"] for e in self.entries}
 
         # Compute file offset for each tile.
         cumulative = info.tile_data_offset
@@ -195,7 +206,9 @@ class OpenSlide:
         "_filename",
         "_closed",
         "_tile_cache",
-        "_file_handle",
+        "_handles",
+        "_open_handles",
+        "_handles_lock",
         "_pid",
         "_info",
         "_index",
@@ -206,8 +219,10 @@ class OpenSlide:
     def __init__(self, filename: str):
         self._filename = filename
         self._closed = False
-        self._tile_cache = _LRUCache(256)
-        self._file_handle: Optional[io.BufferedReader] = None
+        self._tile_cache = _LRUCache(_DEFAULT_CACHE_BYTES)
+        self._handles = threading.local()
+        self._open_handles: List[io.BufferedReader] = []
+        self._handles_lock = threading.Lock()
         self._pid = os.getpid()
 
         try:
@@ -221,7 +236,9 @@ class OpenSlide:
             raise OpenSlideError(f"Failed to build tile index: {e}")
 
         try:
-            self._file_handle = open(filename, "rb")
+            self._ensure_open_handle()
+        except OpenSlideError:
+            raise
         except Exception as e:
             raise OpenSlideError(f"Failed to open file handle: {e}")
 
@@ -284,28 +301,38 @@ class OpenSlide:
             raise OpenSlideError("Slide is closed")
 
     def _ensure_open_handle(self) -> io.BufferedReader:
-        """Return a file handle valid in the current process.
+        """Return a file handle private to the calling thread.
 
-        The handle is reopened if the slide object was inherited by a forked
-        process (e.g. a PyTorch DataLoader worker). After fork, child
-        processes share the parent's OS-level file offset, so concurrent
-        seek/read on the inherited handle corrupts the byte stream
-        (typically surfacing as PIL "cannot identify image file").
+        Each thread gets its own handle (kept in a threading.local), so
+        concurrent read_region() calls on one shared OpenSlide instance
+        never interleave seek/read on the same OS-level file offset.
+        close() closes every per-thread handle via the registry.
+
+        A handle inherited through fork is replaced in the child: the
+        inherited handle shares the parent's OS-level file offset, so
+        concurrent seek/read on it corrupts the byte stream (typically
+        surfacing as PIL "cannot identify image file").
         """
         if self._closed:
             raise OpenSlideError("Slide is closed")
-        if self._file_handle is None or os.getpid() != self._pid:
-            if self._file_handle is not None:
-                try:
-                    self._file_handle.close()
-                except Exception:
-                    pass
+        pid = os.getpid()
+        fh = getattr(self._handles, "fh", None)
+        if fh is not None and pid != self._pid:
             try:
-                self._file_handle = open(self._filename, "rb")
+                fh.close()
+            except Exception:
+                pass
+            fh = None
+        if fh is None:
+            try:
+                fh = open(self._filename, "rb")
             except Exception as e:
-                raise OpenSlideError(f"Failed to reopen file handle: {e}")
-            self._pid = os.getpid()
-        return self._file_handle
+                raise OpenSlideError(f"Failed to open file handle: {e}")
+            self._handles.fh = fh
+            with self._handles_lock:
+                self._open_handles.append(fh)
+            self._pid = pid
+        return fh
 
     def _file_size(self) -> int:
         """Return the size of the underlying file."""
@@ -388,7 +415,7 @@ class OpenSlide:
                 try:
                     fh.seek(soi_abs)
                     data = fh.read(actual_size)
-                    tile = Image.open(io.BytesIO(data)).convert("RGB")
+                    tile = Image.open(io.BytesIO(data)).convert("RGBA")
                 except Exception:
                     continue
 
@@ -461,7 +488,7 @@ class OpenSlide:
         jpeg = fh.read(size)
 
         try:
-            tile = Image.open(io.BytesIO(jpeg)).convert("RGB")
+            tile = Image.open(io.BytesIO(jpeg)).convert("RGBA")
         except Exception as exc:
             tile = self._try_heal_tile(idx, exc)
 
@@ -482,15 +509,22 @@ class OpenSlide:
         return False
 
     def close(self) -> None:
-        """Close the slide and release resources."""
+        """Close the slide and release resources.
+
+        Closes every per-thread file handle via the registry, so a slide
+        read from multiple threads is fully released from any of them. Do
+        not call close() while other threads are still inside
+        read_region() — those reads will fail with I/O errors.
+        """
         self._closed = True
         self._tile_cache.clear()
-        if self._file_handle is not None:
+        with self._handles_lock:
+            handles, self._open_handles = self._open_handles, []
+        for fh in handles:
             try:
-                self._file_handle.close()
+                fh.close()
             except Exception:
                 pass
-            self._file_handle = None
 
     # ------------------------------------------------------------------
     # Properties
@@ -609,14 +643,49 @@ class OpenSlide:
                 crop_y1 = min(th, y0 + h - tile_y)
 
                 if crop_x1 > crop_x0 and crop_y1 > crop_y0:
-                    cropped = tile.crop((crop_x0, crop_y0, crop_x1, crop_y1))
-                    cropped_rgba = cropped.convert("RGBA")
+                    # Tiles are cached as RGBA, so the crop can be pasted
+                    # directly without a per-read alpha conversion.
                     out.paste(
-                        cropped_rgba,
+                        tile.crop((crop_x0, crop_y0, crop_x1, crop_y1)),
                         (paste_x + crop_x0, paste_y + crop_y0),
                     )
 
         return out
+
+    def read_regions(
+        self,
+        regions: Iterable[Tuple[Tuple[int, int], int, Tuple[int, int]]],
+        max_workers: Optional[int] = None,
+    ) -> List[Image.Image]:
+        """Read many regions in parallel and return them in input order.
+
+        Each element of ``regions`` is a ``(location, level, size)`` tuple
+        with the same semantics as :meth:`read_region`. The reads run on a
+        thread pool against this shared instance, which is safe since
+        0.3.4 (per-thread file handles and a locked cache). Scaling is
+        bounded by the GIL for pure-Python work, but I/O-bound reads
+        (network or slow mounts) and Pillow's GIL-releasing JPEG decode
+        pipeline well in practice.
+
+        Args:
+            regions: iterable of ``(location, level, size)`` tuples.
+            max_workers: thread pool size; ``None`` lets
+                ThreadPoolExecutor choose (min(32, cpu_count + 4)).
+
+        Returns:
+            List of PIL.Image.Image (RGBA), one per region, in input order.
+        """
+        self._check_open()
+        region_list = list(regions)
+        if not region_list:
+            return []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            return list(
+                executor.map(
+                    lambda region: self.read_region(region[0], region[1], region[2]),
+                    region_list,
+                )
+            )
 
     def get_thumbnail(self, size: Tuple[int, int]) -> Image.Image:
         """Get a thumbnail image."""
@@ -643,11 +712,24 @@ class OpenSlide:
         Attach a shared cache to the slide.
 
         For kfbslide, this is currently a no-op since we use a private
-        per-slide LRU cache. Accepts the cache argument for API compatibility.
+        byte-bounded LRU cache. Accepts the cache argument for API compatibility.
         """
         self._check_open()
         # No-op for now. Could be extended to use a shared cache.
         pass
+
+    def cache_info(self) -> Dict[str, int]:
+        """Return tile-cache statistics for monitoring.
+
+        Returns:
+            Dict with ``entries`` (cached tiles), ``bytes`` (approximate
+            payload bytes currently cached, RGBA) and ``max_bytes`` (the
+            per-instance budget, 256 MiB by default). Peak memory of N
+            threads sharing one instance is one cache, not N; N separate
+            instances hold N caches (N x max_bytes worst case).
+        """
+        self._check_open()
+        return self._tile_cache.cache_info()
 
 
 # Backward compatibility alias

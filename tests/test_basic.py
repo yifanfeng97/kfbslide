@@ -470,6 +470,190 @@ def test_corrupt_tile_boundary_repair():
         assert region.size == (256, 256)
 
 
+def test_shared_instance_multithreaded_reads():
+    """Concurrent read_region on ONE shared instance must be correct.
+
+    Regression test for the thread-safety report (2026-10-05): a shared
+    OpenSlide instance used to serve every thread from a single
+    io.BufferedReader, so concurrent seek/read pairs interleaved and
+    returned tiles from the wrong file offsets. The corruption window is
+    narrow on local NVMe but opens up on network/slow storage; this test
+    injects a 2 ms delay after each seek to model that case, where the
+    old implementation corrupted ~47% of reads.
+    """
+    import threading
+    import time as _time
+
+    path = _get_healing_test_path()
+    if not path:
+        pytest.skip("No KFB test file available")
+
+    coords = [(x, y) for y in range(0, 2048, 512) for x in range(0, 2048, 512)]
+
+    # Reference outputs, read sequentially before any patching.
+    with OpenSlide(path) as ref_slide:
+        ref = {
+            (x, y): ref_slide.read_region((x, y), 0, (256, 256)).tobytes()
+            for x, y in coords
+        }
+
+    class SlowSeekHandle:
+        """Wraps a handle and sleeps after every seek (slow-storage model)."""
+
+        def __init__(self, fh, delay):
+            self._fh = fh
+            self._delay = delay
+
+        def seek(self, *args):
+            self._fh.seek(*args)
+            _time.sleep(self._delay)
+
+        def read(self, *args):
+            return self._fh.read(*args)
+
+        def fileno(self):
+            return self._fh.fileno()
+
+        def close(self):
+            self._fh.close()
+
+    orig_ensure = OpenSlide._ensure_open_handle
+    OpenSlide._ensure_open_handle = lambda self: SlowSeekHandle(orig_ensure(self), 0.002)
+    try:
+        slide = OpenSlide(path)
+        errors = []
+        corrupted = []
+
+        def worker(tid):
+            for i in range(24):
+                x, y = coords[(tid * 7 + i * 5) % len(coords)]
+                try:
+                    img = slide.read_region((x, y), 0, (256, 256))
+                    if img.tobytes() != ref[(x, y)]:
+                        corrupted.append((tid, i, x, y))
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"{type(e).__name__}: {e}")
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        slide.close()
+    finally:
+        OpenSlide._ensure_open_handle = orig_ensure
+
+    assert errors == []
+    assert corrupted == []
+
+
+def test_lru_cache_thread_safety():
+    """_LRUCache must not raise or corrupt state under concurrent access."""
+    import sys
+    import threading
+
+    from kfbslide._cache import _LRUCache
+
+    # Byte-based capacity; int values fall back to a 1024-byte weight,
+    # so 256 * 1024 bytes keeps at most 256 entries and forces constant
+    # eviction while hammering 1024 distinct keys.
+    cache = _LRUCache(256 * 1024)
+    errors = []
+
+    def worker(tid):
+        try:
+            for i in range(4000):
+                key = (tid * 512 + i) % 1024
+                cache.get(key)
+                cache.put(key, i)
+                if len(cache) > 256:
+                    errors.append(f"capacity exceeded: {len(cache)}")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{type(e).__name__}: {e}")
+
+    # Force frequent GIL switches to widen the race windows.
+    old_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        sys.setswitchinterval(old_interval)
+
+    assert errors == []
+
+
+def test_lru_cache_byte_capacity():
+    """Capacity is measured in approximate bytes, not entry count."""
+    from kfbslide._cache import _LRUCache
+
+    cache = _LRUCache(10 * 1024)
+    tile = Image.new("RGBA", (32, 32))  # 32 * 32 * 4 = 4096 bytes
+    for key in range(10):
+        cache.put(key, tile)
+
+    info = cache.cache_info()
+    assert info == {
+        "entries": 2,
+        "bytes": 2 * 4096,
+        "max_bytes": 10 * 1024,
+    }
+    assert cache.get(0) is None  # evicted
+    assert cache.get(9) is not None  # newest kept
+
+
+def test_read_regions_matches_read_region():
+    """read_regions returns the same images as sequential read_region calls."""
+    path = _get_sample_path()
+    if not path:
+        pytest.skip("No KFB test file available")
+
+    regions = [
+        ((x, y), 0, (256, 256))
+        for y in range(0, 1024, 512)
+        for x in range(0, 1024, 512)
+    ]
+
+    with OpenSlide(path) as slide:
+        batch = slide.read_regions(regions, max_workers=4)
+        assert len(batch) == len(regions)
+        for img, ((x, y), level, size) in zip(batch, regions):
+            ref = slide.read_region((x, y), level, size)
+            assert img.mode == "RGBA"
+            assert img.size == (256, 256)
+            assert img.tobytes() == ref.tobytes()
+
+
+def test_read_regions_empty():
+    """read_regions on an empty list returns an empty list."""
+    path = _get_sample_path()
+    if not path:
+        pytest.skip("No KFB test file available")
+
+    with OpenSlide(path) as slide:
+        assert slide.read_regions([]) == []
+
+
+def test_cache_info_reports_usage():
+    """cache_info exposes entries/bytes/max_bytes after a read."""
+    path = _get_sample_path()
+    if not path:
+        pytest.skip("No KFB test file available")
+
+    with OpenSlide(path) as slide:
+        info0 = slide.cache_info()
+        assert set(info0) == {"entries", "bytes", "max_bytes"}
+        assert info0["max_bytes"] == 256 * 1024 * 1024
+
+        slide.read_region((0, 0), 0, (256, 256))
+        info1 = slide.cache_info()
+        assert info1["entries"] >= 1
+        assert info1["bytes"] >= 256 * 256 * 4
+
+
 # ---------------------------------------------------------------------------
 # Multiprocessing (PyTorch DataLoader-style) regression test
 # ---------------------------------------------------------------------------
